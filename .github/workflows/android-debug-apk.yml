@@ -50,6 +50,7 @@ jobs:
       # Execute Unit Tests
       - name: Run Unit Tests
         id: unit_tests
+        continue-on-error: true
         run: |
           cd android
           gradle --no-daemon testDebugUnitTest
@@ -57,6 +58,7 @@ jobs:
       # Execute Lint (continues on error so APK build is attempted, but outcome is tracked)
       - name: Run Lint
         id: lint
+        if: ${{ !cancelled() }}
         continue-on-error: true
         run: |
           cd android
@@ -64,7 +66,7 @@ jobs:
 
       # Upload Lint reports (always runs if lint step was reached)
       - name: Upload Lint Reports
-        if: always() && steps.unit_tests.outcome == 'success'
+        if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
         with:
           name: SysHush-lint-reports
@@ -77,14 +79,14 @@ jobs:
       # Build Debug APK (runs even if Lint failed)
       - name: Build Debug APK
         id: build_debug
-        if: steps.unit_tests.outcome == 'success'
+        if: ${{ !cancelled() }}
         run: |
           cd android
           gradle --no-daemon assembleDebug
 
       # Upload Debug APK artifact
       - name: Upload Debug APK
-        if: steps.build_debug.outcome == 'success'
+        if: ${{ !cancelled() && steps.build_debug.outcome == 'success' }}
         uses: actions/upload-artifact@v4
         with:
           name: SysHush-debug-apk
@@ -97,14 +99,14 @@ jobs:
       # Build Release APK (runs even if Lint failed)
       - name: Build Release APK
         id: build_release
-        if: steps.unit_tests.outcome == 'success'
+        if: ${{ !cancelled() }}
         run: |
           cd android
           gradle --no-daemon assembleRelease
 
       # Upload Release APK artifact
       - name: Upload Release APK
-        if: steps.build_release.outcome == 'success'
+        if: ${{ !cancelled() && steps.build_release.outcome == 'success' }}
         uses: actions/upload-artifact@v4
         with:
           name: SysHush-release-apk
@@ -118,22 +120,34 @@ jobs:
       - name: Verify All Quality Gates Passed
         if: always()
         run: |
+          TEST_OUTCOME="${{ steps.unit_tests.outcome }}"
           LINT_OUTCOME="${{ steps.lint.outcome }}"
           DEBUG_OUTCOME="${{ steps.build_debug.outcome }}"
           RELEASE_OUTCOME="${{ steps.build_release.outcome }}"
+          echo "Unit Tests Outcome: $TEST_OUTCOME"
           echo "Lint Outcome: $LINT_OUTCOME"
           echo "Debug Build Outcome: $DEBUG_OUTCOME"
           echo "Release Build Outcome: $RELEASE_OUTCOME"
+
+          FAILED=0
+          if [ "$TEST_OUTCOME" != "success" ]; then
+            echo "::error::Unit tests failed."
+            FAILED=1
+          fi
           if [ "$LINT_OUTCOME" != "success" ]; then
-            echo "::error::Lint check failed! Review uploaded SysHush-lint-reports artifact for details."
-            exit 1
+            echo "::error::Lint check failed! Review the SysHush-lint-reports artifact."
+            FAILED=1
           fi
           if [ "$DEBUG_OUTCOME" != "success" ]; then
             echo "::error::Debug APK build failed!"
-            exit 1
+            FAILED=1
           fi
           if [ "$RELEASE_OUTCOME" != "success" ]; then
             echo "::error::Release APK build failed!"
+            FAILED=1
+          fi
+
+          if [ "$FAILED" -ne 0 ]; then
             exit 1
           fi
           echo "All quality gates passed successfully!"
