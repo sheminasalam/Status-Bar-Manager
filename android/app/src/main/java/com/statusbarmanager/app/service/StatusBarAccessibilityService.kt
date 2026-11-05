@@ -1009,7 +1009,9 @@ class StatusBarAccessibilityService : AccessibilityService() {
             currentStep = AutomationStep.FAILED,
             operationTitle = "Automation Error",
             currentOperation = reason,
-            percentage = 100,
+            // A failed run must not look like 100% success. Preserve the last
+            // completed stage percentage as a diagnostic indicator.
+            percentage = _progressState.value.percentage.coerceIn(0, 99),
             errorReason = reason
         )
         _progressState.value = progress
