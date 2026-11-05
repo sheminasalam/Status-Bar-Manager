@@ -204,7 +204,7 @@ export const ArchitectureDoc: React.FC = () => {
         </div>
 
         <p className="text-[11px] text-gray-400 mt-3">
-          Ready-to-run workflow files have been generated at <code className="text-blue-300 font-mono">.github/workflows/android-debug-apk.yml</code> and <code className="text-blue-300 font-mono">.github/workflows/build-apk.yml</code> and are included in the project export.
+          The consolidated, ready-to-run workflow file is located at <code className="text-blue-300 font-mono">.github/workflows/android-debug-apk.yml</code> and is included in the project export.
         </p>
       </div>
     </div>

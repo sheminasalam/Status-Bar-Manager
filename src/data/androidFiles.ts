@@ -870,6 +870,150 @@ jobs:
             android/app/build/outputs/apk/debug/*.apk`
   },
   {
+    path: 'app/src/main/res/values/colors.xml',
+    name: 'colors.xml',
+    language: 'xml',
+    category: 'Manifest & Resources',
+    content: `<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="primary">#2563EB</color>
+    <color name="primary_variant">#1D4ED8</color>
+    <color name="secondary">#06B6D4</color>
+    <color name="background_dark">#0B0F17</color>
+    <color name="surface_dark">#111827</color>
+    <color name="text_primary">#F9FAFB</color>
+    <color name="text_secondary">#9CA3AF</color>
+    <color name="ic_launcher_background">#0B0F17</color>
+</resources>`
+  },
+  {
+    path: 'app/src/main/res/drawable/ic_launcher_background.xml',
+    name: 'ic_launcher_background.xml',
+    language: 'xml',
+    category: 'Manifest & Resources',
+    content: `<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#0B0F17"
+        android:pathData="M0,0h108v108h-108z" />
+</vector>`
+  },
+  {
+    path: 'app/src/main/res/drawable/ic_launcher_foreground.xml',
+    name: 'ic_launcher_foreground.xml',
+    language: 'xml',
+    category: 'Manifest & Resources',
+    content: `<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group
+        android:pivotX="54"
+        android:pivotY="54">
+        <path
+            android:fillColor="#1E3A8A"
+            android:fillAlpha="0.3"
+            android:pathData="M54,18 C73.88,18 90,34.12 90,54 C90,73.88 73.88,90 54,90 C34.12,90 18,73.88 18,54 C18,34.12 34.12,18 54,18 Z" />
+        <path
+            android:fillColor="#1E293B"
+            android:strokeColor="#3B82F6"
+            android:strokeWidth="1.5"
+            android:pathData="M37,20 L71,20 A7,7 0 0 1 78,27 L78,81 A7,7 0 0 1 71,88 L37,88 A7,7 0 0 1 30,81 L30,27 A7,7 0 0 1 37,20 Z" />
+        <path
+            android:fillColor="#0B0F17"
+            android:pathData="M33,26 L75,26 L75,82 L33,82 Z" />
+        <path
+            android:fillColor="#64748B"
+            android:pathData="M50,22.5 L58,22.5 A1,1 0 0 1 59,23.5 L59,23.5 A1,1 0 0 1 58,24.5 L50,24.5 A1,1 0 0 1 49,23.5 L49,23.5 A1,1 0 0 1 50,22.5 Z" />
+        <path
+            android:fillColor="#2563EB"
+            android:fillAlpha="0.25"
+            android:pathData="M33,26 L75,26 L75,37 L33,37 Z" />
+        <path
+            android:strokeColor="#2563EB"
+            android:strokeWidth="0.75"
+            android:pathData="M33,37 L75,37" />
+        <path
+            android:strokeColor="#60A5FA"
+            android:strokeWidth="1"
+            android:strokeLineCap="round"
+            android:pathData="M38,31.5 A2.5,2.5 0 1 0 43,31.5 A2.5,2.5 0 1 0 38,31.5" />
+        <path
+            android:strokeColor="#60A5FA"
+            android:strokeWidth="0.8"
+            android:strokeLineCap="round"
+            android:pathData="M40.5,30 L40.5,31.5 L41.8,31.5" />
+        <path
+            android:strokeColor="#38BDF8"
+            android:strokeWidth="0.9"
+            android:strokeLineCap="round"
+            android:pathData="M59,33 A4,4 0 0 1 65,33" />
+        <path
+            android:strokeColor="#38BDF8"
+            android:strokeWidth="0.9"
+            android:strokeLineCap="round"
+            android:pathData="M60.5,34.5 A2,2 0 0 1 63.5,34.5" />
+        <path
+            android:fillColor="#38BDF8"
+            android:pathData="M62,35.5 A0.6,0.6 0 1 0 62,36.7 A0.6,0.6 0 1 0 62,35.5" />
+        <path
+            android:strokeColor="#34D399"
+            android:strokeWidth="0.9"
+            android:pathData="M67,29.5 L72,29.5 A1,1 0 0 1 73,30.5 L73,33.5 A1,1 0 0 1 72,34.5 L67,34.5 A1,1 0 0 1 66,33.5 L66,30.5 A1,1 0 0 1 67,29.5 Z" />
+        <path
+            android:fillColor="#34D399"
+            android:pathData="M73,31.2 L74,31.2 L74,32.8 L73,32.8 Z" />
+        <path
+            android:fillColor="#34D399"
+            android:pathData="M67.5,31 L70.5,31 L70.5,33 L67.5,33 Z" />
+        <path
+            android:fillColor="#1E293B"
+            android:strokeColor="#3B82F6"
+            android:strokeWidth="1.2"
+            android:pathData="M44,52 L64,52 A6,6 0 0 1 70,58 L70,58 A6,6 0 0 1 64,64 L44,64 A6,6 0 0 1 38,58 L38,58 A6,6 0 0 1 44,52 Z" />
+        <path
+            android:fillColor="#38BDF8"
+            android:pathData="M64,58 A4.5,4.5 0 1 0 55,58 A4.5,4.5 0 1 0 64,58 Z" />
+        <path
+            android:strokeColor="#94A3B8"
+            android:strokeWidth="1.2"
+            android:strokeLineCap="round"
+            android:pathData="M43,72 C47,68 61,68 65,72 C61,76 47,76 43,72 Z" />
+        <path
+            android:fillColor="#60A5FA"
+            android:pathData="M54,72 A2,2 0 1 0 54,68 A2,2 0 1 0 54,72 Z" />
+    </group>
+</vector>`
+  },
+  {
+    path: 'app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml',
+    name: 'ic_launcher.xml',
+    language: 'xml',
+    category: 'Manifest & Resources',
+    content: `<?xml version="1.0" encoding="utf-8"?>
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@color/ic_launcher_background" />
+    <foreground android:drawable="@drawable/ic_launcher_foreground" />
+</adaptive-icon>`
+  },
+  {
+    path: 'app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml',
+    name: 'ic_launcher_round.xml',
+    language: 'xml',
+    category: 'Manifest & Resources',
+    content: `<?xml version="1.0" encoding="utf-8"?>
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@color/ic_launcher_background" />
+    <foreground android:drawable="@drawable/ic_launcher_foreground" />
+</adaptive-icon>`
+  },
+  {
     path: '.github/workflows/android-debug-apk.yml',
     name: 'android-debug-apk.yml',
     language: 'markdown',
@@ -881,6 +1025,14 @@ on:
   push:
     branches:
       - main
+      - master
+    paths:
+      - "android/**"
+      - ".github/workflows/android-debug-apk.yml"
+  pull_request:
+    branches:
+      - main
+      - master
     paths:
       - "android/**"
       - ".github/workflows/android-debug-apk.yml"
@@ -903,33 +1055,25 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      # FIX FOR: "Warning: Failed to find package 'tools'"
-      # android-actions/setup-android@v3 defaults to 'tools platform-tools'.
-      # Standalone 'tools' is removed from modern SDKs; explicit override is required:
+      # Install Android SDK components (avoids removed 'tools' package)
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
         with:
-          packages: 'platform-tools'
+          packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
 
-      - name: Install Android SDK packages
-        run: |
-          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
-
+      # Consistently provision Gradle 8.9
       - name: Set up Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.9"
 
+      # Execute debug build using installed Gradle 8.9 in the android project directory
       - name: Build debug APK
         run: |
           cd android
-          if [ -f "gradle/wrapper/gradle-wrapper.jar" ]; then
-            chmod +x gradlew
-            ./gradlew --no-daemon clean assembleDebug
-          else
-            gradle --no-daemon clean assembleDebug
-          fi
+          gradle --no-daemon clean assembleDebug
 
+      # Upload resulting APK artifact
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:

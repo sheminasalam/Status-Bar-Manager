@@ -5,6 +5,14 @@ on:
   push:
     branches:
       - main
+      - master
+    paths:
+      - "android/**"
+      - ".github/workflows/android-debug-apk.yml"
+  pull_request:
+    branches:
+      - main
+      - master
     paths:
       - "android/**"
       - ".github/workflows/android-debug-apk.yml"
@@ -27,30 +35,25 @@ jobs:
           distribution: temurin
           java-version: "17"
 
+      # Install Android SDK components (avoids removed 'tools' package)
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
         with:
-          packages: 'platform-tools'
+          packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
 
-      - name: Install Android SDK packages
-        run: |
-          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
-
+      # Consistently provision Gradle 8.9
       - name: Set up Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.9"
 
+      # Execute debug build using installed Gradle 8.9 in the android project directory
       - name: Build debug APK
         run: |
           cd android
-          if [ -f "gradle/wrapper/gradle-wrapper.jar" ]; then
-            chmod +x gradlew
-            ./gradlew --no-daemon clean assembleDebug
-          else
-            gradle --no-daemon clean assembleDebug
-          fi
+          gradle --no-daemon clean assembleDebug
 
+      # Upload resulting APK artifact
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
