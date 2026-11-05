@@ -167,7 +167,6 @@ class StatusBarAccessibilityService : AccessibilityService() {
         delay(400)
 
         // ----------------------------------------------------
-        if (isHideMode || isRestoreMode) {
         // PHASE 1: STATUS BAR AUTOMATION (if applicable)
         // ----------------------------------------------------
         var isPartial = false
@@ -196,8 +195,7 @@ class StatusBarAccessibilityService : AccessibilityService() {
             if (!reachedStatusBar) {
                 throw IllegalStateException("Could not find 'Status bar' section in Settings. Please open it manually.")
             }
-        }
-        delay(900)
+            delay(900)
 
         // Step 4: Baseline backup & Time display handling
         updateChecklist("backup", StepStatus.IN_PROGRESS)
@@ -298,8 +296,6 @@ class StatusBarAccessibilityService : AccessibilityService() {
             performGlobalAction(GLOBAL_ACTION_BACK)
             delay(600)
         }
-
-        // ----------------------------------------------------
         }
 
         // PHASE 2: APPLICATION FORCE STOP AUTOMATION (if applicable)
