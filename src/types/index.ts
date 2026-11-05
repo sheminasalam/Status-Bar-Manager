@@ -63,6 +63,29 @@ export interface AutomationStep {
 
 export type DeviceOem = 'color_os' | 'one_ui' | 'hyper_os' | 'pixel';
 
+export type EngageMode = 'STATUS_BAR_ONLY' | 'FORCE_STOP_APPS_ONLY' | 'BOTH';
+
+export interface AppItem {
+  packageName: string;
+  appName: string;
+  isSystemApp: boolean;
+  isWhitelisted: boolean;
+  isProtectedRole: boolean;
+  protectionReason?: string;
+  isStopped?: boolean;
+}
+
+export interface AppForceStopStats {
+  totalEligible: number;
+  successfullyStopped: number;
+  alreadyStopped: number;
+  skippedProtected: number;
+  skippedWhitelisted: number;
+  failed: number;
+  remaining: number;
+  currentAppName?: string;
+}
+
 export interface CodeFile {
   path: string;
   name: string;

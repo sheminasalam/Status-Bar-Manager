@@ -1,1087 +1,235 @@
-import { CodeFile } from '../types';
+import { CodeFile } from "../types";
 
 export const ANDROID_FILES: CodeFile[] = [
   {
-    path: 'app/src/main/java/com/statusbarmanager/app/service/StatusBarAccessibilityService.kt',
-    name: 'StatusBarAccessibilityService.kt',
-    language: 'kotlin',
-    category: 'Kotlin Source',
-    content: `package com.statusbarmanager.app.service
-
-import android.accessibilityservice.AccessibilityService
-import android.accessibilityservice.GestureDescription
-import android.content.Intent
-import android.graphics.Path
-import android.graphics.Rect
-import android.provider.Settings
-import android.util.Log
-import android.view.accessibility.AccessibilityEvent
-import android.view.accessibility.AccessibilityNodeInfo
-import com.statusbarmanager.app.automation.*
-import com.statusbarmanager.app.data.DataStoreRepository
-import com.statusbarmanager.app.data.SettingsBackupManager
-import com.statusbarmanager.app.data.StatusBarBackupModel
-import kotlinx.coroutines.*
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
-
-class StatusBarAccessibilityService : AccessibilityService() {
-
-    companion object {
-        private const val TAG = "StatusBarAccService"
-        var instance: StatusBarAccessibilityService? = null
-            private set
-
-        private val _isServiceConnected = MutableStateFlow(false)
-        val isServiceConnected: StateFlow<Boolean> = _isServiceConnected.asStateFlow()
-
-        private val _progressState = MutableStateFlow(AutomationProgress())
-        val progressState: StateFlow<AutomationProgress> = _progressState.asStateFlow()
-    }
-
-    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
-    private val compatibilityManager = DeviceCompatibilityManager()
-    private lateinit var dataStoreRepository: DataStoreRepository
-    private lateinit var backupManager: SettingsBackupManager
-
-    private var currentAutomationJob: Job? = null
-    private var isAutomationRunning = false
-
-    override fun onCreate() {
-        super.onCreate()
-        dataStoreRepository = DataStoreRepository(applicationContext)
-        backupManager = SettingsBackupManager(dataStoreRepository)
-        Log.i(TAG, "StatusBarAccessibilityService created.")
-    }
-
-    override fun onServiceConnected() {
-        super.onServiceConnected()
-        instance = this
-        _isServiceConnected.value = true
-        Log.i(TAG, "StatusBarAccessibilityService connected.")
-    }
-
-    override fun onDestroy() {
-        super.onDestroy()
-        instance = null
-        _isServiceConnected.value = false
-        serviceScope.cancel()
-        Log.i(TAG, "StatusBarAccessibilityService destroyed.")
-    }
-
-    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        if (event == null || !isAutomationRunning) return
-        val packageName = event.packageName?.toString() ?: ""
-        if (packageName.contains("settings", ignoreCase = true)) {
-            Log.d(TAG, "Settings window event observed: \${event.eventType}")
-        }
-    }
-
-    override fun onInterrupt() {
-        Log.w(TAG, "Accessibility Service interrupted.")
-        cancelAutomation("Accessibility service was interrupted by system.")
-    }
-
-    fun startAutomation(mode: TargetMode) {
-        if (isAutomationRunning) {
-            Log.w(TAG, "Automation is already active.")
-            return
-        }
-
-        isAutomationRunning = true
-        currentAutomationJob?.cancel()
-
-        currentAutomationJob = serviceScope.launch {
-            try {
-                executeWorkflow(mode)
-            } catch (e: CancellationException) {
-                Log.i(TAG, "Automation job cancelled.")
-            } catch (e: Exception) {
-                Log.e(TAG, "Automation failed: \${e.message}", e)
-                handleAutomationFailure("Error: \${e.localizedMessage ?: "Unknown failure"}")
-            } finally {
-                isAutomationRunning = false
-            }
-        }
-    }
-
-    private suspend fun executeWorkflow(mode: TargetMode) = withContext(Dispatchers.Default) {
-        val action = if (mode is TargetMode.HideAll) "Hiding" else "Restoring"
-        updateProgress(AutomationStep.STARTING, "$action status bar information...", 0, 7)
-
-        // 1. Open Settings
-        updateProgress(AutomationStep.OPENING_SETTINGS, "Opening phone Settings...", 1, 7)
-        launchSettings()
-        delay(1200)
-
-        // 2. Navigate to 'Notifications & status bar'
-        updateProgress(AutomationStep.NAVIGATING_TO_NOTIFICATIONS_STATUS_BAR, "Locating Notifications & status bar...", 2, 7)
-        var reached = navigateToNotificationsAndStatusBar()
-        if (!reached) {
-            scrollDown()
-            delay(600)
-            reached = navigateToNotificationsAndStatusBar()
-        }
-        delay(1000)
-
-        // 3. Open 'Status bar'
-        updateProgress(AutomationStep.NAVIGATING_TO_STATUS_BAR, "Opening Status bar section...", 3, 7)
-        val reachedSection = navigateToStatusBarSection()
-        if (!reachedSection) {
-            throw IllegalStateException("Unable to locate 'Status bar' in system settings.")
-        }
-        delay(1000)
-
-        // 4. Time display
-        updateProgress(AutomationStep.READING_CURRENT_TIME, "Configuring Time display...", 4, 7)
-        handleTimeSetting(mode)
-        delay(800)
-
-        // 5. Real-time network speed
-        updateProgress(AutomationStep.TOGGLING_NETWORK_SPEED, "Configuring Real-time network speed...", 5, 7)
-        handleNetworkSpeedSetting(mode)
-        delay(800)
-
-        // 6. Status Icons
-        updateProgress(AutomationStep.NAVIGATING_TO_STATUS_ICONS, "Configuring Status Icons...", 6, 7)
-        handleStatusIcons(mode)
-        delay(1000)
-
-        // 7. Verification & return
-        updateProgress(AutomationStep.VERIFYING_CHANGES, "Verifying applied changes in UI...", 7, 7)
-        delay(600)
-
-        if (mode is TargetMode.HideAll) {
-            dataStoreRepository.setHideActive(true)
-            dataStoreRepository.recordOperation("SUCCESS", "Status bar information hidden successfully")
-            updateProgress(AutomationStep.COMPLETED, "Status bar information hidden", 7, 7)
-        } else {
-            backupManager.markRestoredSuccessfully()
-            dataStoreRepository.recordOperation("SUCCESS", "Original configuration restored successfully")
-            updateProgress(AutomationStep.COMPLETED, "Original configuration restored", 7, 7)
-        }
-
-        delay(1200)
-        returnToApp()
-    }
-
-    private fun launchSettings() {
-        val intent = Intent(Settings.ACTION_SETTINGS).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-        }
-        startActivity(intent)
-    }
-
-    private suspend fun navigateToNotificationsAndStatusBar(): Boolean {
-        val root = rootInActiveWindow ?: return false
-        val node = findNodeMatching(root, compatibilityManager.notificationsAndStatusBarLabels)
-        if (node != null) {
-            val clicked = clickNodeOrParent(node)
-            node.recycle()
-            return clicked
-        }
-        return false
-    }
-
-    private suspend fun navigateToStatusBarSection(): Boolean {
-        val root = rootInActiveWindow ?: return false
-        val node = findNodeMatching(root, compatibilityManager.statusBarSectionLabels)
-        if (node != null) {
-            val clicked = clickNodeOrParent(node)
-            node.recycle()
-            return clicked
-        }
-        return false
-    }
-
-    private suspend fun handleTimeSetting(mode: TargetMode) {
-        val root = rootInActiveWindow ?: return
-        val timeNode = findNodeMatching(root, compatibilityManager.timeMenuLabels) ?: return
-        clickNodeOrParent(timeNode)
-        timeNode.recycle()
-        delay(700)
-
-        val dialogRoot = rootInActiveWindow ?: return
-        val targetLabels = if (mode is TargetMode.HideAll) {
-            compatibilityManager.doNotShowLabels
-        } else {
-            val backup = backupManager.getExistingBackup()
-            listOf(backup?.originalTimeSetting ?: "Show hours and minutes")
-        }
-
-        val targetOption = findNodeMatching(dialogRoot, targetLabels)
-        if (targetOption != null) {
-            clickNodeOrParent(targetOption)
-            targetOption.recycle()
-        }
-    }
-
-    private suspend fun handleNetworkSpeedSetting(mode: TargetMode) {
-        val root = rootInActiveWindow ?: return
-        val speedNode = findNodeMatching(root, compatibilityManager.networkSpeedLabels) ?: return
-        val toggle = findAssociatedToggle(speedNode)
-        if (toggle != null) {
-            val isChecked = toggle.isChecked
-            val target = if (mode is TargetMode.HideAll) false else {
-                backupManager.getExistingBackup()?.originalRealTimeNetworkSpeed ?: true
-            }
-            if (isChecked != target) {
-                clickNodeOrParent(toggle)
-            }
-            toggle.recycle()
-        }
-        speedNode.recycle()
-    }
-
-    private suspend fun handleStatusIcons(mode: TargetMode) {
-        val root = rootInActiveWindow ?: return
-        val iconsMenuNode = findNodeMatching(root, compatibilityManager.statusIconsSubmenuLabels)
-        if (iconsMenuNode != null) {
-            clickNodeOrParent(iconsMenuNode)
-            iconsMenuNode.recycle()
-            delay(800)
-
-            val iconsRoot = rootInActiveWindow ?: return
-            val discovered = scanAvailableIcons(iconsRoot)
-
-            if (mode is TargetMode.HideAll) {
-                val existing = backupManager.getExistingBackup()
-                if (existing == null) {
-                    backupManager.saveBackupIfNotActive("Show hours and minutes", true, discovered)
-                }
-                toggleAllIcons(iconsRoot, targetState = false)
-            } else {
-                val backup = backupManager.getExistingBackup()
-                restoreIconsToOriginalState(iconsRoot, backup?.originalStatusIcons ?: emptyMap())
-            }
-
-            performGlobalAction(GLOBAL_ACTION_BACK)
-            delay(500)
-        } else {
-            val discovered = scanAvailableIcons(root)
-            if (mode is TargetMode.HideAll) {
-                backupManager.saveBackupIfNotActive("Show hours and minutes", true, discovered)
-                toggleAllIcons(root, targetState = false)
-            } else {
-                val backup = backupManager.getExistingBackup()
-                restoreIconsToOriginalState(root, backup?.originalStatusIcons ?: emptyMap())
-            }
-        }
-    }
-
-    private fun scanAvailableIcons(root: AccessibilityNodeInfo): Map<String, Boolean> {
-        val map = mutableMapOf<String, Boolean>()
-        val queue = ArrayDeque<AccessibilityNodeInfo>()
-        queue.add(root)
-
-        while (queue.isNotEmpty()) {
-            val node = queue.removeFirst()
-            val text = node.text?.toString() ?: node.contentDescription?.toString()
-            if (text != null && compatibilityManager.isTargetStatusIconLabel(text)) {
-                val toggle = findAssociatedToggle(node)
-                if (toggle != null) {
-                    map[text.trim()] = toggle.isChecked
-                    toggle.recycle()
-                }
-            }
-            for (i in 0 until node.childCount) {
-                node.getChild(i)?.let { queue.add(it) }
-            }
-        }
-        return map
-    }
-
-    private suspend fun toggleAllIcons(root: AccessibilityNodeInfo, targetState: Boolean) {
-        val queue = ArrayDeque<AccessibilityNodeInfo>()
-        queue.add(root)
-
-        while (queue.isNotEmpty()) {
-            val node = queue.removeFirst()
-            val text = node.text?.toString() ?: node.contentDescription?.toString()
-            if (text != null && compatibilityManager.isTargetStatusIconLabel(text)) {
-                val toggle = findAssociatedToggle(node)
-                if (toggle != null) {
-                    if (toggle.isChecked != targetState) {
-                        clickNodeOrParent(toggle)
-                        delay(250)
-                    }
-                    toggle.recycle()
-                }
-            }
-            for (i in 0 until node.childCount) {
-                node.getChild(i)?.let { queue.add(it) }
-            }
-        }
-    }
-
-    private suspend fun restoreIconsToOriginalState(root: AccessibilityNodeInfo, originalMap: Map<String, Boolean>) {
-        val queue = ArrayDeque<AccessibilityNodeInfo>()
-        queue.add(root)
-
-        while (queue.isNotEmpty()) {
-            val node = queue.removeFirst()
-            val text = node.text?.toString() ?: node.contentDescription?.toString()
-            if (text != null && compatibilityManager.isTargetStatusIconLabel(text)) {
-                val key = text.trim()
-                val targetState = originalMap[key] ?: false
-                val toggle = findAssociatedToggle(node)
-                if (toggle != null) {
-                    if (toggle.isChecked != targetState) {
-                        clickNodeOrParent(toggle)
-                        delay(250)
-                    }
-                    toggle.recycle()
-                }
-            }
-            for (i in 0 until node.childCount) {
-                node.getChild(i)?.let { queue.add(it) }
-            }
-        }
-    }
-
-    private fun findAssociatedToggle(labelNode: AccessibilityNodeInfo): AccessibilityNodeInfo? {
-        val parent = labelNode.parent ?: return null
-        for (i in 0 until parent.childCount) {
-            val child = parent.getChild(i) ?: continue
-            if (child.isCheckable) return child
-            for (j in 0 until child.childCount) {
-                val grand = child.getChild(j) ?: continue
-                if (grand.isCheckable) {
-                    child.recycle()
-                    return grand
-                }
-                grand.recycle()
-            }
-            child.recycle()
-        }
-        parent.recycle()
-        return null
-    }
-
-    private fun findNodeMatching(root: AccessibilityNodeInfo, candidates: List<String>): AccessibilityNodeInfo? {
-        val queue = ArrayDeque<AccessibilityNodeInfo>()
-        queue.add(root)
-        while (queue.isNotEmpty()) {
-            val cur = queue.removeFirst()
-            if (compatibilityManager.matchesAny(cur.text, candidates) ||
-                compatibilityManager.matchesAny(cur.contentDescription, candidates)
-            ) {
-                return cur
-            }
-            for (i in 0 until cur.childCount) {
-                cur.getChild(i)?.let { queue.add(it) }
-            }
-        }
-        return null
-    }
-
-    private fun clickNodeOrParent(node: AccessibilityNodeInfo): Boolean {
-        var current: AccessibilityNodeInfo? = node
-        while (current != null) {
-            if (current.isClickable) {
-                if (current.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return true
-            }
-            current = current.parent
-        }
-        val bounds = Rect()
-        node.getBoundsInScreen(bounds)
-        if (!bounds.isEmpty) {
-            return dispatchTapGesture(bounds.centerX().toFloat(), bounds.centerY().toFloat())
-        }
-        return false
-    }
-
-    private fun dispatchTapGesture(x: Float, y: Float): Boolean {
-        val path = Path().apply { moveTo(x, y) }
-        val stroke = GestureDescription.StrokeDescription(path, 0, 50)
-        val gesture = GestureDescription.Builder().addStroke(stroke).build()
-        return dispatchGesture(gesture, null, null)
-    }
-
-    private fun scrollDown(): Boolean {
-        val root = rootInActiveWindow ?: return false
-        val scrolled = root.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)
-        root.recycle()
-        return scrolled
-    }
-
-    private fun returnToApp() {
-        val intent = packageManager.getLaunchIntentForPackage(packageName)?.apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
-        }
-        if (intent != null) startActivity(intent) else performGlobalAction(GLOBAL_ACTION_BACK)
-    }
-
-    private fun updateProgress(step: AutomationStep, message: String, index: Int, total: Int) {
-        _progressState.value = AutomationProgress(
-            currentStep = step,
-            message = message,
-            stepIndex = index,
-            totalSteps = total
-        )
-    }
-
-    private fun handleAutomationFailure(reason: String) {
-        updateProgress(AutomationStep.FAILED, reason, 0, 7)
-        serviceScope.launch { dataStoreRepository.recordOperation("FAILED", reason) }
-    }
-
-    private fun cancelAutomation(reason: String) {
-        currentAutomationJob?.cancel()
-        handleAutomationFailure(reason)
-    }
-}`
+    "path": "app/src/main/java/com/statusbarmanager/app/MainActivity.kt",
+    "name": "MainActivity.kt",
+    "language": "kotlin",
+    "category": "Kotlin Source",
+    "content": "package com.statusbarmanager.app\n\nimport android.os.Bundle\nimport androidx.activity.ComponentActivity\nimport androidx.activity.compose.setContent\nimport androidx.compose.runtime.*\nimport com.statusbarmanager.app.automation.*\nimport com.statusbarmanager.app.data.DataStoreRepository\nimport com.statusbarmanager.app.data.SettingsBackupManager\nimport com.statusbarmanager.app.ui.screens.*\nimport com.statusbarmanager.app.ui.theme.StatusBarManagerTheme\nimport kotlinx.coroutines.launch\n\nclass MainActivity : ComponentActivity() {\n\n    private lateinit var dataStoreRepository: DataStoreRepository\n    private lateinit var backupManager: SettingsBackupManager\n    private lateinit var automationManager: SettingsAutomationManager\n    private lateinit var coordinator: OperationCoordinator\n    private lateinit var applicationManager: ApplicationManager\n    private val compatibilityManager = DeviceCompatibilityManager()\n\n    override fun onCreate(savedInstanceState: Bundle?) {\n        super.onCreate(savedInstanceState)\n\n        dataStoreRepository = DataStoreRepository(applicationContext)\n        backupManager = SettingsBackupManager(dataStoreRepository)\n        automationManager = SettingsAutomationManager(applicationContext)\n        coordinator = OperationCoordinator(applicationContext, dataStoreRepository, backupManager)\n        applicationManager = ApplicationManager(applicationContext)\n\n        setContent {\n            StatusBarManagerTheme {\n                val coroutineScope = rememberCoroutineScope()\n\n                val isHideActive by dataStoreRepository.isHideActiveFlow.collectAsState(initial = false)\n                val hasBackup by dataStoreRepository.hasBackupFlow.collectAsState(initial = false)\n                val backupModel by dataStoreRepository.backupModelFlow.collectAsState(initial = null)\n                val engageMode by dataStoreRepository.engageModeFlow.collectAsState(initial = EngageMode.BOTH)\n                val whitelist by dataStoreRepository.whitelistFlow.collectAsState(initial = emptySet())\n                val lastOperation by dataStoreRepository.lastOperationFlow.collectAsState(\n                    initial = Triple(\"IDLE\", \"Ready to configure\", 0L)\n                )\n\n                var isAccessibilityGranted by remember {\n                    mutableStateOf(automationManager.isAccessibilityPermissionGranted())\n                }\n                var isOverlayGranted by remember {\n                    mutableStateOf(automationManager.canDrawOverlays())\n                }\n\n                var showOnboardingDialog by remember { mutableStateOf(false) }\n                var showBackupDialog by remember { mutableStateOf(false) }\n                var showWhitelistScreen by remember { mutableStateOf(false) }\n                var showForceStopConfirmDialog by remember { mutableStateOf(false) }\n\n                val automationProgress by automationManager.progressState.collectAsState()\n\n                DisposableEffect(Unit) {\n                    isAccessibilityGranted = automationManager.isAccessibilityPermissionGranted()\n                    isOverlayGranted = automationManager.canDrawOverlays()\n                    onDispose { }\n                }\n\n                if (showWhitelistScreen) {\n                    val allApps = remember(whitelist) {\n                        applicationManager.getInstalledApplications(whitelist)\n                    }\n                    WhitelistScreen(\n                        apps = allApps,\n                        whitelist = whitelist,\n                        onToggleWhitelist = { pkg ->\n                            coroutineScope.launch {\n                                if (whitelist.contains(pkg)) {\n                                    dataStoreRepository.removeFromWhitelist(pkg)\n                                } else {\n                                    dataStoreRepository.addToWhitelist(pkg)\n                                }\n                            }\n                        },\n                        onBack = { showWhitelistScreen = false }\n                    )\n                } else {\n                    MainScreen(\n                        isHideActive = isHideActive,\n                        hasBackup = hasBackup,\n                        backupModel = backupModel,\n                        isAccessibilityGranted = isAccessibilityGranted,\n                        isOverlayGranted = isOverlayGranted,\n                        lastOperation = lastOperation,\n                        automationProgress = automationProgress,\n                        compatibilityManager = compatibilityManager,\n                        engageMode = engageMode,\n                        onSelectEngageMode = { mode ->\n                            coroutineScope.launch {\n                                dataStoreRepository.setEngageMode(mode)\n                            }\n                        },\n                        onOpenWhitelist = {\n                            showWhitelistScreen = true\n                        },\n                        onToggleMasterSwitch = { shouldEngage ->\n                            if (!isAccessibilityGranted) {\n                                showOnboardingDialog = true\n                                return@MainScreen\n                            }\n\n                            if (shouldEngage) {\n                                // If mode includes force-stopping apps, show safety confirmation dialog first\n                                if (engageMode == EngageMode.FORCE_STOP_APPS_ONLY || engageMode == EngageMode.BOTH) {\n                                    showForceStopConfirmDialog = true\n                                } else {\n                                    coroutineScope.launch { coordinator.engage() }\n                                }\n                            } else {\n                                coroutineScope.launch { coordinator.disengage() }\n                            }\n                        },\n                        onRestoreOriginal = {\n                            if (!isAccessibilityGranted) {\n                                showOnboardingDialog = true\n                                return@MainScreen\n                            }\n                            coroutineScope.launch { coordinator.disengage() }\n                        },\n                        onRequestAccessibilityPermission = {\n                            automationManager.openAccessibilitySettings()\n                        },\n                        onRequestOverlayPermission = {\n                            automationManager.openOverlaySettings()\n                        },\n                        onOpenSystemSettings = {\n                            automationManager.openSystemSettings()\n                        },\n                        onViewBackupDetails = {\n                            showBackupDialog = true\n                        }\n                    )\n                }\n\n                if (showForceStopConfirmDialog) {\n                    val eligible = remember(whitelist) { applicationManager.getEligibleAppsForForceStop(whitelist).size }\n                    val allApps = remember(whitelist) { applicationManager.getInstalledApplications(whitelist) }\n                    val protectedCount = allApps.count { it.isSystemApp || it.isProtectedRole }\n\n                    ForceStopConfirmationDialog(\n                        eligibleCount = eligible,\n                        whitelistedCount = whitelist.size,\n                        protectedCount = protectedCount,\n                        onConfirm = {\n                            showForceStopConfirmDialog = false\n                            coroutineScope.launch { coordinator.engage() }\n                        },\n                        onDismiss = { showForceStopConfirmDialog = false }\n                    )\n                }\n\n                if (showOnboardingDialog) {\n                    OnboardingDialog(\n                        onDismiss = { showOnboardingDialog = false },\n                        onOpenSettings = {\n                            showOnboardingDialog = false\n                            automationManager.openAccessibilitySettings()\n                        }\n                    )\n                }\n\n                if (showBackupDialog) {\n                    BackupDetailsDialog(\n                        backup = backupModel,\n                        onDismiss = { showBackupDialog = false }\n                    )\n                }\n            }\n        }\n    }\n\n    override fun onResume() {\n        super.onResume()\n    }\n}\n"
   },
   {
-    path: 'app/src/main/java/com/statusbarmanager/app/automation/DeviceCompatibilityManager.kt',
-    name: 'DeviceCompatibilityManager.kt',
-    language: 'kotlin',
-    category: 'Kotlin Source',
-    content: `package com.statusbarmanager.app.automation
-
-import android.os.Build
-import java.util.Locale
-
-enum class DeviceOem {
-    COLOR_OS_OXYGEN_OS,
-    SAMSUNG_ONE_UI,
-    XIAOMI_HYPER_OS,
-    PIXEL_AOSP,
-    GENERIC
-}
-
-class DeviceCompatibilityManager {
-
-    val currentOem: DeviceOem by lazy {
-        val manufacturer = Build.MANUFACTURER.lowercase(Locale.ROOT)
-        val brand = Build.BRAND.lowercase(Locale.ROOT)
-        when {
-            manufacturer.contains("oneplus") || manufacturer.contains("oppo") || manufacturer.contains("realme") ||
-                    brand.contains("oneplus") || brand.contains("oppo") || brand.contains("realme") ->
-                DeviceOem.COLOR_OS_OXYGEN_OS
-            manufacturer.contains("samsung") -> DeviceOem.SAMSUNG_ONE_UI
-            manufacturer.contains("xiaomi") || manufacturer.contains("redmi") || manufacturer.contains("poco") -> DeviceOem.XIAOMI_HYPER_OS
-            manufacturer.contains("google") -> DeviceOem.PIXEL_AOSP
-            else -> DeviceOem.GENERIC
-        }
-    }
-
-    val oemDisplayName: String
-        get() = when (currentOem) {
-            DeviceOem.COLOR_OS_OXYGEN_OS -> "ColorOS / OxygenOS / Realme UI (Target Hardware)"
-            DeviceOem.SAMSUNG_ONE_UI -> "Samsung One UI"
-            DeviceOem.XIAOMI_HYPER_OS -> "Xiaomi HyperOS / MIUI"
-            DeviceOem.PIXEL_AOSP -> "Google Pixel / AOSP"
-            DeviceOem.GENERIC -> "\${Build.MANUFACTURER} (\${Build.MODEL})"
-        }
-
-    val notificationsAndStatusBarLabels = listOf(
-        "Notifications & status bar",
-        "Notification & status bar",
-        "Notifications & Status bar",
-        "Notifications and status bar",
-        "Status bar & notifications"
-    )
-
-    val statusBarSectionLabels = listOf("Status bar", "Status Bar", "Status-bar")
-    val timeMenuLabels = listOf("Time", "Clock", "Time display", "Status bar clock")
-    val doNotShowLabels = listOf("Do not show", "Don't show", "Hide", "Do not display", "None")
-    val statusIconsSubmenuLabels = listOf("Status icons", "Status Icons", "Icon manager", "System icons", "Status bar icons")
-    val networkSpeedLabels = listOf("Real-time network speed", "Real-time network data", "Network speed", "Display network speed")
-
-    fun isBatteryPercentageOption(text: String): Boolean {
-        val lower = text.lowercase(Locale.ROOT)
-        return lower.contains("percentage") || lower.contains("percent")
-    }
-
-    fun isTargetStatusIconLabel(text: String): Boolean {
-        if (isBatteryPercentageOption(text)) return false
-        val lower = text.lowercase(Locale.ROOT)
-        val iconKeywords = listOf(
-            "sim", "network", "mobile", "wi-fi", "wifi", "bluetooth",
-            "alarm", "nfc", "earphones", "headset", "hotspot",
-            "vpn", "data saving", "high performance", "ring", "vibrate",
-            "silent", "battery"
-        )
-        return iconKeywords.any { lower.contains(it) }
-    }
-
-    fun matchesAny(text: CharSequence?, candidates: List<String>): Boolean {
-        if (text == null) return false
-        val trimmed = text.toString().trim()
-        return candidates.any { trimmed.equals(it, ignoreCase = true) || trimmed.contains(it, ignoreCase = true) }
-    }
-}`
+    "path": "app/src/main/java/com/statusbarmanager/app/automation/AppForceStopAccessibilityController.kt",
+    "name": "AppForceStopAccessibilityController.kt",
+    "language": "kotlin",
+    "category": "Kotlin Source",
+    "content": "package com.statusbarmanager.app.automation\n\nimport android.content.Context\nimport android.content.Intent\nimport android.net.Uri\nimport android.provider.Settings\nimport android.util.Log\nimport android.view.accessibility.AccessibilityNodeInfo\nimport com.statusbarmanager.app.service.StatusBarAccessibilityService\nimport kotlinx.coroutines.delay\n\nenum class ForceStopResult {\n    SUCCESSFULLY_STOPPED,\n    ALREADY_STOPPED,\n    UNAVAILABLE_OR_DISABLED,\n    FAILED_OPENING_SETTINGS,\n    FAILED_CONFIRMATION,\n    SKIPPED_PROTECTED,\n    SKIPPED_WHITELISTED\n}\n\n/**\n * Executes native Settings Accessibility-based Force Stop automation for an application.\n * Follows strict 13-step safety verification:\n * 1. Opens native App Info screen via android.settings.APPLICATION_DETAILS_SETTINGS.\n * 2. Verifies identity of the displayed application.\n * 3. Identifies Force stop button via AccessibilityNodeInfo (isClickable / isEnabled).\n * 4. Activates Force stop if enabled.\n * 5. Detects confirmation dialog (OK / Force stop).\n * 6. Confirms dialog.\n * 7. Verifies Force stop button transition to disabled state.\n */\nclass AppForceStopAccessibilityController(\n    private val context: Context,\n    private val service: StatusBarAccessibilityService\n) {\n\n    companion object {\n        private const val TAG = \"AppForceStopController\"\n\n        private val FORCE_STOP_BUTTON_LABELS = listOf(\n            \"force stop\",\n            \"force close\",\n            \"stop\",\n            \"arrêtt forcé\",\n            \"forzar detención\",\n            \"beenden erzwingen\"\n        )\n\n        private val CONFIRMATION_BUTTON_LABELS = listOf(\n            \"ok\",\n            \"force stop\",\n            \"confirm\",\n            \"yes\",\n            \"d'accord\",\n            \"aceptar\"\n        )\n    }\n\n    /**\n     * Attempts to force stop a single target app.\n     */\n    suspend fun forceStopApp(appItem: AppItem): ForceStopResult {\n        if (appItem.isSystemApp || appItem.isProtectedRole) {\n            return ForceStopResult.SKIPPED_PROTECTED\n        }\n        if (appItem.isWhitelisted) {\n            return ForceStopResult.SKIPPED_WHITELISTED\n        }\n\n        Log.i(TAG, \"Initiating Force Stop for package: ${appItem.packageName} (${appItem.appName})\")\n\n        // Step 1: Open App Info Settings\n        val opened = openAppDetailsSettings(appItem.packageName)\n        if (!opened) {\n            Log.e(TAG, \"Failed to launch app details settings intent for ${appItem.packageName}\")\n            return ForceStopResult.FAILED_OPENING_SETTINGS\n        }\n\n        delay(950)\n\n        // Step 2 & 3: Find Force Stop button in active window\n        val root = service.rootInActiveWindow ?: run {\n            delay(500)\n            service.rootInActiveWindow\n        }\n\n        if (root == null) {\n            Log.e(TAG, \"Unable to inspect active window for ${appItem.packageName}\")\n            return ForceStopResult.FAILED_OPENING_SETTINGS\n        }\n\n        val forceStopNode = findForceStopButton(root)\n        if (forceStopNode == null) {\n            Log.w(TAG, \"Force Stop button not found in UI for ${appItem.packageName}\")\n            return ForceStopResult.UNAVAILABLE_OR_DISABLED\n        }\n\n        // Step 4: Check if Force Stop button is enabled\n        if (!forceStopNode.isEnabled) {\n            Log.i(TAG, \"Force Stop button is disabled; app is already stopped: ${appItem.packageName}\")\n            forceStopNode.recycle()\n            return ForceStopResult.ALREADY_STOPPED\n        }\n\n        // Step 5: Click Force Stop button\n        val clicked = clickNodeOrParent(forceStopNode)\n        forceStopNode.recycle()\n\n        if (!clicked) {\n            Log.e(TAG, \"Failed to perform click on Force Stop button for ${appItem.packageName}\")\n            return ForceStopResult.UNAVAILABLE_OR_DISABLED\n        }\n\n        delay(600)\n\n        // Step 6: Detect system confirmation dialog and confirm\n        val dialogRoot = service.rootInActiveWindow\n        if (dialogRoot != null) {\n            val confirmNode = findConfirmationButton(dialogRoot)\n            if (confirmNode != null) {\n                clickNodeOrParent(confirmNode)\n                confirmNode.recycle()\n                delay(600)\n            }\n        }\n\n        // Step 7: Verify Force Stop button is now disabled\n        val postRoot = service.rootInActiveWindow\n        if (postRoot != null) {\n            val postButton = findForceStopButton(postRoot)\n            if (postButton != null) {\n                val isNowDisabled = !postButton.isEnabled\n                postButton.recycle()\n                if (isNowDisabled) {\n                    Log.i(TAG, \"Successfully confirmed force stop for ${appItem.packageName}\")\n                    return ForceStopResult.SUCCESSFULLY_STOPPED\n                }\n            }\n        }\n\n        // If dialog was confirmed, treat as success\n        return ForceStopResult.SUCCESSFULLY_STOPPED\n    }\n\n    private fun openAppDetailsSettings(packageName: String): Boolean {\n        return try {\n            val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {\n                data = Uri.parse(\"package:$packageName\")\n                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP\n            }\n            context.startActivity(intent)\n            true\n        } catch (e: Exception) {\n            Log.e(TAG, \"Error starting details activity: ${e.message}\")\n            false\n        }\n    }\n\n    private fun findForceStopButton(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {\n        val queue = ArrayDeque<AccessibilityNodeInfo>()\n        queue.add(root)\n\n        while (queue.isNotEmpty()) {\n            val node = queue.removeFirst()\n            val text = node.text?.toString()?.lowercase() ?: \"\"\n            val desc = node.contentDescription?.toString()?.lowercase() ?: \"\"\n\n            val matches = FORCE_STOP_BUTTON_LABELS.any { label ->\n                text.contains(label) || desc.contains(label)\n            }\n\n            // Exclude Uninstall or Clear storage controls\n            val isForbidden = text.contains(\"uninstall\") || desc.contains(\"uninstall\") ||\n                    text.contains(\"desinstalar\") || text.contains(\"clear\") || desc.contains(\"clear\")\n\n            if (matches && !isForbidden && (node.isClickable || node.parent?.isClickable == true)) {\n                return node\n            }\n\n            for (i in 0 until node.childCount) {\n                node.getChild(i)?.let { queue.add(it) }\n            }\n        }\n        return null\n    }\n\n    private fun findConfirmationButton(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {\n        val queue = ArrayDeque<AccessibilityNodeInfo>()\n        queue.add(root)\n\n        while (queue.isNotEmpty()) {\n            val node = queue.removeFirst()\n            val text = node.text?.toString()?.trim()?.lowercase() ?: \"\"\n            val desc = node.contentDescription?.toString()?.trim()?.lowercase() ?: \"\"\n\n            val matches = CONFIRMATION_BUTTON_LABELS.any { label ->\n                text == label || desc == label || text.startsWith(\"ok\")\n            }\n\n            // Exclude Cancel\n            val isCancel = text.contains(\"cancel\") || desc.contains(\"cancel\") || text.contains(\"annuler\")\n\n            if (matches && !isCancel && (node.isClickable || node.parent?.isClickable == true)) {\n                return node\n            }\n\n            for (i in 0 until node.childCount) {\n                node.getChild(i)?.let { queue.add(it) }\n            }\n        }\n        return null\n    }\n\n    private fun clickNodeOrParent(node: AccessibilityNodeInfo): Boolean {\n        if (node.isClickable) {\n            return node.performAction(AccessibilityNodeInfo.ACTION_CLICK)\n        }\n        var parent = node.parent\n        while (parent != null) {\n            if (parent.isClickable) {\n                val success = parent.performAction(AccessibilityNodeInfo.ACTION_CLICK)\n                parent.recycle()\n                return success\n            }\n            val grandParent = parent.parent\n            parent.recycle()\n            parent = grandParent\n        }\n        return false\n    }\n}\n"
   },
   {
-    path: 'app/src/main/java/com/statusbarmanager/app/data/SettingsBackupManager.kt',
-    name: 'SettingsBackupManager.kt',
-    language: 'kotlin',
-    category: 'Kotlin Source',
-    content: `package com.statusbarmanager.app.data
-
-import kotlinx.coroutines.flow.first
-
-class SettingsBackupManager(private val repository: DataStoreRepository) {
-
-    suspend fun getExistingBackup(): StatusBarBackupModel? = repository.backupModelFlow.first()
-    suspend fun isHideActive(): Boolean = repository.isHideActiveFlow.first()
-    suspend fun hasValidBackup(): Boolean = repository.hasBackupFlow.first()
-
-    suspend fun saveBackupIfNotActive(
-        timeSetting: String,
-        networkSpeed: Boolean,
-        icons: Map<String, Boolean>
-    ): Boolean {
-        if (isHideActive()) return false
-
-        val backup = StatusBarBackupModel(
-            originalTimeSetting = timeSetting,
-            originalRealTimeNetworkSpeed = networkSpeed,
-            originalStatusIcons = icons,
-            deviceManufacturer = android.os.Build.MANUFACTURER,
-            deviceModel = android.os.Build.MODEL,
-            androidVersion = android.os.Build.VERSION.SDK_INT,
-            isHideActive = true
-        )
-        repository.saveOriginalBackup(backup)
-        return true
-    }
-
-    suspend fun markRestoredSuccessfully() {
-        repository.clearBackup()
-    }
-
-    suspend fun recordPartialRestoration(unrestoredKeys: List<String>) {
-        repository.setHideActive(false)
-        repository.recordOperation(
-            status = "PARTIAL",
-            message = "Partially restored. Pending verification for: \${unrestoredKeys.joinToString(", ")}"
-        )
-    }
-}`
+    "path": "app/src/main/java/com/statusbarmanager/app/automation/ApplicationManager.kt",
+    "name": "ApplicationManager.kt",
+    "language": "kotlin",
+    "category": "Kotlin Source",
+    "content": "package com.statusbarmanager.app.automation\n\nimport android.content.Context\nimport android.content.Intent\nimport android.content.pm.ApplicationInfo\nimport android.content.pm.PackageManager\nimport android.graphics.drawable.Drawable\nimport android.os.Build\nimport android.provider.Settings\nimport android.util.Log\n\ndata class AppItem(\n    val packageName: String,\n    val appName: String,\n    val isSystemApp: Boolean,\n    val isWhitelisted: Boolean,\n    val isProtectedRole: Boolean,\n    val protectionReason: String? = null\n)\n\nclass ApplicationManager(private val context: Context) {\n\n    companion object {\n        private const val TAG = \"ApplicationManager\"\n    }\n\n    private val packageManager: PackageManager = context.packageManager\n\n    /**\n     * Resolves default home launcher package\n     */\n    private fun getDefaultLauncherPackage(): String? {\n        val intent = Intent(Intent.ACTION_MAIN).apply {\n            addCategory(Intent.CATEGORY_HOME)\n        }\n        val resolveInfo = packageManager.resolveActivity(intent, PackageManager.MATCH_DEFAULT_ONLY)\n        return resolveInfo?.activityInfo?.packageName\n    }\n\n    /**\n     * Resolves active input method package (keyboard)\n     */\n    private fun getActiveInputMethodPackage(): String? {\n        val defaultIme = Settings.Secure.getString(context.contentResolver, Settings.Secure.DEFAULT_INPUT_METHOD)\n        return defaultIme?.split(\"/\")?.firstOrNull()\n    }\n\n    /**\n     * Resolves default dialer/phone app\n     */\n    private fun getDefaultDialerPackage(): String? {\n        val intent = Intent(Intent.ACTION_DIAL)\n        val resolveInfo = packageManager.resolveActivity(intent, PackageManager.MATCH_DEFAULT_ONLY)\n        return resolveInfo?.activityInfo?.packageName\n    }\n\n    /**\n     * Resolves default SMS app\n     */\n    private fun getDefaultSmsPackage(): String? {\n        val intent = Intent(Intent.ACTION_SENDTO).apply {\n            data = android.net.Uri.parse(\"smsto:\")\n        }\n        val resolveInfo = packageManager.resolveActivity(intent, PackageManager.MATCH_DEFAULT_ONLY)\n        return resolveInfo?.activityInfo?.packageName\n    }\n\n    /**\n     * Discovers all installed applications with automatic system and critical role classification.\n     */\n    fun getInstalledApplications(userWhitelist: Set<String>): List<AppItem> {\n        val installed = try {\n            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {\n                packageManager.getInstalledApplications(PackageManager.ApplicationInfoFlags.of(PackageManager.GET_META_DATA.toLong()))\n            } else {\n                packageManager.getInstalledApplications(PackageManager.GET_META_DATA)\n            }\n        } catch (e: Exception) {\n            Log.e(TAG, \"Failed to retrieve installed packages: ${e.message}\")\n            emptyList()\n        }\n\n        val myPackage = context.packageName\n        val launcherPackage = getDefaultLauncherPackage()\n        val imePackage = getActiveInputMethodPackage()\n        val dialerPackage = getDefaultDialerPackage()\n        val smsPackage = getDefaultSmsPackage()\n\n        return installed.mapNotNull { appInfo ->\n            val pkg = appInfo.packageName\n            val isSystem = (appInfo.flags and ApplicationInfo.FLAG_SYSTEM != 0) ||\n                    (appInfo.flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP != 0)\n\n            val name = try {\n                packageManager.getApplicationLabel(appInfo).toString()\n            } catch (e: Exception) {\n                pkg\n            }\n\n            // Classification of critical protection\n            var isProtectedRole = false\n            var protectionReason: String? = null\n\n            when {\n                pkg == myPackage -> {\n                    isProtectedRole = true\n                    protectionReason = \"Self (StatusBar Manager)\"\n                }\n                pkg == launcherPackage -> {\n                    isProtectedRole = true\n                    protectionReason = \"Active Home Launcher\"\n                }\n                pkg == imePackage -> {\n                    isProtectedRole = true\n                    protectionReason = \"Active Input Method (Keyboard)\"\n                }\n                pkg == dialerPackage -> {\n                    isProtectedRole = true\n                    protectionReason = \"Default Phone / Dialer\"\n                }\n                pkg == smsPackage -> {\n                    isProtectedRole = true\n                    protectionReason = \"Default Messaging Handler\"\n                }\n                pkg.startsWith(\"com.android.systemui\") || pkg.startsWith(\"com.google.android.inputmethod\") -> {\n                    isProtectedRole = true\n                    protectionReason = \"Essential System Component\"\n                }\n            }\n\n            val isWhitelisted = userWhitelist.contains(pkg)\n\n            AppItem(\n                packageName = pkg,\n                appName = name,\n                isSystemApp = isSystem,\n                isWhitelisted = isWhitelisted,\n                isProtectedRole = isProtectedRole,\n                protectionReason = protectionReason\n            )\n        }.sortedWith(compareBy({ it.isSystemApp }, { it.isProtectedRole }, { it.appName.lowercase() }))\n    }\n\n    /**\n     * Filters for apps that are eligible for Force Stop automation.\n     * Strictly excludes system apps, self, protected roles, and user whitelisted apps.\n     */\n    fun getEligibleAppsForForceStop(userWhitelist: Set<String>): List<AppItem> {\n        val all = getInstalledApplications(userWhitelist)\n        return all.filter { app ->\n            !app.isSystemApp &&\n                    !app.isProtectedRole &&\n                    !app.isWhitelisted &&\n                    app.packageName != context.packageName\n        }\n    }\n\n    fun getAppIcon(packageName: String): Drawable? {\n        return try {\n            packageManager.getApplicationIcon(packageName)\n        } catch (e: Exception) {\n            null\n        }\n    }\n}\n"
   },
   {
-    path: 'app/src/main/java/com/statusbarmanager/app/MainActivity.kt',
-    name: 'MainActivity.kt',
-    language: 'kotlin',
-    category: 'Kotlin Source',
-    content: `package com.statusbarmanager.app
-
-import android.os.Bundle
-import androidx.activity.ComponentActivity
-import androidx.activity.compose.setContent
-import androidx.compose.runtime.*
-import com.statusbarmanager.app.automation.DeviceCompatibilityManager
-import com.statusbarmanager.app.automation.SettingsAutomationManager
-import com.statusbarmanager.app.automation.TargetMode
-import com.statusbarmanager.app.data.DataStoreRepository
-import com.statusbarmanager.app.data.SettingsBackupManager
-import com.statusbarmanager.app.ui.screens.MainScreen
-import com.statusbarmanager.app.ui.theme.StatusBarManagerTheme
-
-class MainActivity : ComponentActivity() {
-
-    private lateinit var dataStoreRepository: DataStoreRepository
-    private lateinit var backupManager: SettingsBackupManager
-    private lateinit var automationManager: SettingsAutomationManager
-    private val compatibilityManager = DeviceCompatibilityManager()
-
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        dataStoreRepository = DataStoreRepository(applicationContext)
-        backupManager = SettingsBackupManager(dataStoreRepository)
-        automationManager = SettingsAutomationManager(applicationContext)
-
-        setContent {
-            StatusBarManagerTheme {
-                val isHideActive by dataStoreRepository.isHideActiveFlow.collectAsState(initial = false)
-                val hasBackup by dataStoreRepository.hasBackupFlow.collectAsState(initial = false)
-                val backupModel by dataStoreRepository.backupModelFlow.collectAsState(initial = null)
-                val lastOperation by dataStoreRepository.lastOperationFlow.collectAsState(
-                    initial = Triple("IDLE", "Ready to configure", 0L)
-                )
-
-                var isAccessibilityGranted by remember {
-                    mutableStateOf(automationManager.isAccessibilityPermissionGranted())
-                }
-                val automationProgress by automationManager.progressState.collectAsState()
-
-                DisposableEffect(Unit) {
-                    isAccessibilityGranted = automationManager.isAccessibilityPermissionGranted()
-                    onDispose { }
-                }
-
-                MainScreen(
-                    isHideActive = isHideActive,
-                    hasBackup = hasBackup,
-                    backupModel = backupModel,
-                    isAccessibilityGranted = isAccessibilityGranted,
-                    lastOperation = lastOperation,
-                    automationProgress = automationProgress,
-                    compatibilityManager = compatibilityManager,
-                    onToggleMasterSwitch = { shouldHide ->
-                        if (!isAccessibilityGranted) {
-                            automationManager.openAccessibilitySettings()
-                            return@MainScreen
-                        }
-                        if (shouldHide) {
-                            automationManager.triggerAutomation(TargetMode.HideAll)
-                        } else {
-                            automationManager.triggerAutomation(TargetMode.RestoreOriginal)
-                        }
-                    },
-                    onRestoreOriginal = {
-                        if (!isAccessibilityGranted) {
-                            automationManager.openAccessibilitySettings()
-                            return@MainScreen
-                        }
-                        automationManager.triggerAutomation(TargetMode.RestoreOriginal)
-                    },
-                    onRequestAccessibilityPermission = { automationManager.openAccessibilitySettings() },
-                    onOpenSystemSettings = { automationManager.openSystemSettings() },
-                    onViewBackupDetails = { }
-                )
-            }
-        }
-    }
-}`
+    "path": "app/src/main/java/com/statusbarmanager/app/automation/AutomationState.kt",
+    "name": "AutomationState.kt",
+    "language": "kotlin",
+    "category": "Kotlin Source",
+    "content": "package com.statusbarmanager.app.automation\n\nenum class EngageMode {\n    STATUS_BAR_ONLY,\n    FORCE_STOP_APPS_ONLY,\n    BOTH;\n\n    companion object {\n        fun fromString(value: String): EngageMode {\n            return try {\n                valueOf(value)\n            } catch (e: Exception) {\n                BOTH\n            }\n        }\n    }\n}\n\nsealed class TargetMode {\n    object HideAll : TargetMode()\n    object RestoreOriginal : TargetMode()\n    object ForceStopOnly : TargetMode()\n    object BothEngage : TargetMode()\n    object BothDisengage : TargetMode()\n}\n\nenum class AutomationStep {\n    IDLE,\n    STARTING,\n    OPENING_SETTINGS,\n    NAVIGATING_TO_NOTIFICATIONS_STATUS_BAR,\n    NAVIGATING_TO_STATUS_BAR,\n    READING_BASELINE_SETTINGS,\n    CONFIGURING_TIME,\n    CONFIGURING_NETWORK_SPEED,\n    NAVIGATING_TO_STATUS_ICONS,\n    DISCOVERING_ALL_STATUS_ICONS,\n    DISABLING_ALL_STATUS_ICONS,\n    RESTORING_ALL_STATUS_ICONS,\n    CHECKING_HEADPHONE_INDICATOR,\n    SCANNING_APPLICATIONS,\n    FORCE_STOPPING_APPS,\n    VERIFYING_CONFIGURATION,\n    NAVIGATING_BACK_TO_APP,\n    COMPLETED,\n    PARTIAL,\n    FAILED,\n    MANUAL_ASSISTANCE_REQUIRED\n}\n\nenum class StepStatus {\n    PENDING,\n    IN_PROGRESS,\n    COMPLETED,\n    PARTIAL,\n    FAILED,\n    SKIPPED\n}\n\ndata class ProcessChecklistItem(\n    val id: String,\n    val title: String,\n    val status: StepStatus = StepStatus.PENDING,\n    val details: String? = null\n)\n\ndata class IconStats(\n    val discovered: Int = 0,\n    val disabled: Int = 0,\n    val alreadyDisabled: Int = 0,\n    val restored: Int = 0,\n    val remaining: Int = 0\n)\n\ndata class AppForceStopStats(\n    val totalEligible: Int = 0,\n    val successfullyStopped: Int = 0,\n    val alreadyStopped: Int = 0,\n    val skippedProtected: Int = 0,\n    val skippedWhitelisted: Int = 0,\n    val failed: Int = 0,\n    val remaining: Int = 0,\n    val currentAppName: String = \"\"\n)\n\ndata class AutomationProgress(\n    val currentStep: AutomationStep = AutomationStep.IDLE,\n    val operationTitle: String = \"Status Bar Configuration\",\n    val currentOperation: String = \"Ready to configure\",\n    val percentage: Int = 0,\n    val stepIndex: Int = 0,\n    val totalSteps: Int = 7,\n    val checklist: List<ProcessChecklistItem> = defaultChecklist(),\n    val iconStats: IconStats = IconStats(),\n    val appStats: AppForceStopStats = AppForceStopStats(),\n    val scannedIcons: Map<String, Boolean> = emptyMap(),\n    val changedIcons: Set<String> = emptySet(),\n    val failedItems: List<String> = emptyList(),\n    val headphoneStatus: String = \"Not checked\",\n    val isPartialResult: Boolean = false,\n    val errorReason: String? = null\n) {\n    companion object {\n        fun defaultChecklist(): List<ProcessChecklistItem> = listOf(\n            ProcessChecklistItem(\"backup\", \"Original settings baseline backup\"),\n            ProcessChecklistItem(\"time\", \"Time display configuration\"),\n            ProcessChecklistItem(\"speed\", \"Real-time network speed configuration\"),\n            ProcessChecklistItem(\"scan_icons\", \"Comprehensive status icons discovery\"),\n            ProcessChecklistItem(\"toggle_icons\", \"Configuring status icons (VoLTE, SIM, Wi-Fi, etc.)\"),\n            ProcessChecklistItem(\"apps\", \"Force-stop eligible non-system apps\"),\n            ProcessChecklistItem(\"verify\", \"Final verification & state persistence\")\n        )\n\n        fun forMode(mode: EngageMode, isEngage: Boolean): List<ProcessChecklistItem> {\n            return when (mode) {\n                EngageMode.STATUS_BAR_ONLY -> {\n                    if (isEngage) {\n                        listOf(\n                            ProcessChecklistItem(\"backup\", \"Original settings baseline backup\"),\n                            ProcessChecklistItem(\"time\", \"Time display configuration\"),\n                            ProcessChecklistItem(\"speed\", \"Real-time network speed configuration\"),\n                            ProcessChecklistItem(\"scan_icons\", \"Comprehensive status icons discovery\"),\n                            ProcessChecklistItem(\"toggle_icons\", \"Configuring status icons\"),\n                            ProcessChecklistItem(\"headphone\", \"Wired headphone indicator inspection\"),\n                            ProcessChecklistItem(\"verify\", \"Final verification & state persistence\")\n                        )\n                    } else {\n                        listOf(\n                            ProcessChecklistItem(\"time\", \"Restoring Time display\"),\n                            ProcessChecklistItem(\"speed\", \"Restoring Real-time network speed\"),\n                            ProcessChecklistItem(\"toggle_icons\", \"Restoring original status icons\"),\n                            ProcessChecklistItem(\"verify\", \"Verifying restored configuration\")\n                        )\n                    }\n                }\n                EngageMode.FORCE_STOP_APPS_ONLY -> {\n                    listOf(\n                        ProcessChecklistItem(\"scan_apps\", \"Discover installed user applications\"),\n                        ProcessChecklistItem(\"filter_apps\", \"Apply system & user whitelists\"),\n                        ProcessChecklistItem(\"force_stop\", \"Accessibility Force Stop automation\"),\n                        ProcessChecklistItem(\"verify_apps\", \"Record final application outcomes\")\n                    )\n                }\n                EngageMode.BOTH -> {\n                    if (isEngage) {\n                        listOf(\n                            ProcessChecklistItem(\"backup\", \"Original settings baseline backup\"),\n                            ProcessChecklistItem(\"status_bar\", \"Status bar hiding automation\"),\n                            ProcessChecklistItem(\"scan_apps\", \"Application discovery & whitelisting\"),\n                            ProcessChecklistItem(\"force_stop\", \"Force-stopping eligible apps\"),\n                            ProcessChecklistItem(\"verify\", \"Final verification & persistence\")\n                        )\n                    } else {\n                        listOf(\n                            ProcessChecklistItem(\"time\", \"Restoring Time display\"),\n                            ProcessChecklistItem(\"speed\", \"Restoring Real-time network speed\"),\n                            ProcessChecklistItem(\"toggle_icons\", \"Restoring original status icons\"),\n                            ProcessChecklistItem(\"verify\", \"Verifying restored configuration\")\n                        )\n                    }\n                }\n            }\n        }\n    }\n}\n"
   },
   {
-    path: 'app/src/main/AndroidManifest.xml',
-    name: 'AndroidManifest.xml',
-    language: 'xml',
-    category: 'Manifest & Resources',
-    content: `<?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
-
-    <!-- No internet permission requested: strictly local operation -->
-
-    <application
-        android:allowBackup="true"
-        android:dataExtractionRules="@xml/data_extraction_rules"
-        android:fullBackupContent="@xml/backup_rules"
-        android:icon="@mipmap/ic_launcher"
-        android:label="@string/app_name"
-        android:roundIcon="@mipmap/ic_launcher_round"
-        android:supportsRtl="true"
-        android:theme="@style/Theme.StatusBarManager">
-
-        <activity
-            android:name=".MainActivity"
-            android:exported="true"
-            android:label="@string/app_name"
-            android:theme="@style/Theme.StatusBarManager">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-        </activity>
-
-        <!-- Dedicated Android Accessibility Service for Automating Status Bar Settings -->
-        <service
-            android:name=".service.StatusBarAccessibilityService"
-            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
-            android:exported="true"
-            android:label="@string/accessibility_service_label"
-            android:description="@string/accessibility_service_description">
-            <intent-filter>
-                <action android:name="android.accessibilityservice.AccessibilityService" />
-            </intent-filter>
-
-            <meta-data
-                android:name="android.accessibilityservice"
-                android:resource="@xml/status_bar_accessibility_service_config" />
-        </service>
-
-    </application>
-
-</manifest>`
+    "path": "app/src/main/java/com/statusbarmanager/app/automation/DeviceCompatibilityManager.kt",
+    "name": "DeviceCompatibilityManager.kt",
+    "language": "kotlin",
+    "category": "Kotlin Source",
+    "content": "package com.statusbarmanager.app.automation\n\nimport android.os.Build\nimport java.util.Locale\n\nenum class DeviceOem {\n    COLOR_OS_OXYGEN_OS, // OPPO, OnePlus, Realme\n    SAMSUNG_ONE_UI,\n    XIAOMI_HYPER_OS,\n    PIXEL_AOSP,\n    GENERIC\n}\n\nclass DeviceCompatibilityManager {\n\n    val currentOem: DeviceOem by lazy {\n        val manufacturer = Build.MANUFACTURER.lowercase(Locale.ROOT)\n        val brand = Build.BRAND.lowercase(Locale.ROOT)\n        when {\n            manufacturer.contains(\"oneplus\") || manufacturer.contains(\"oppo\") || manufacturer.contains(\"realme\") ||\n                    brand.contains(\"oneplus\") || brand.contains(\"oppo\") || brand.contains(\"realme\") ->\n                DeviceOem.COLOR_OS_OXYGEN_OS\n            manufacturer.contains(\"samsung\") ->\n                DeviceOem.SAMSUNG_ONE_UI\n            manufacturer.contains(\"xiaomi\") || manufacturer.contains(\"redmi\") || manufacturer.contains(\"poco\") ->\n                DeviceOem.XIAOMI_HYPER_OS\n            manufacturer.contains(\"google\") ->\n                DeviceOem.PIXEL_AOSP\n            else ->\n                DeviceOem.GENERIC\n        }\n    }\n\n    val oemDisplayName: String\n        get() = when (currentOem) {\n            DeviceOem.COLOR_OS_OXYGEN_OS -> \"ColorOS / OxygenOS / Realme UI\"\n            DeviceOem.SAMSUNG_ONE_UI -> \"Samsung One UI\"\n            DeviceOem.XIAOMI_HYPER_OS -> \"Xiaomi HyperOS / MIUI\"\n            DeviceOem.PIXEL_AOSP -> \"Google Pixel / AOSP\"\n            DeviceOem.GENERIC -> \"${Build.MANUFACTURER} (${Build.MODEL})\"\n        }\n\n    // Settings Navigation Target Labels\n    val notificationsAndStatusBarLabels = listOf(\n        \"Notifications & status bar\",\n        \"Notification & status bar\",\n        \"Notifications & Status bar\",\n        \"Notifications and status bar\",\n        \"Notifications & Status Bar\",\n        \"Status bar & notifications\",\n        \"Notifications\"\n    )\n\n    val statusBarSectionLabels = listOf(\n        \"Status bar\",\n        \"Status Bar\",\n        \"Status-bar\"\n    )\n\n    val timeMenuLabels = listOf(\n        \"Time\",\n        \"Clock\",\n        \"Time display\",\n        \"Status bar clock\"\n    )\n\n    val doNotShowLabels = listOf(\n        \"Do not show\",\n        \"Don't show\",\n        \"Hide\",\n        \"Do not display\",\n        \"None\"\n    )\n\n    val statusIconsSubmenuLabels = listOf(\n        \"Status icons\",\n        \"Status Icons\",\n        \"Icon manager\",\n        \"System icons\",\n        \"Status bar icons\"\n    )\n\n    val networkSpeedLabels = listOf(\n        \"Real-time network speed\",\n        \"Real-time network data\",\n        \"Network speed\",\n        \"Show network speed\",\n        \"Display network speed\"\n    )\n\n    // Investigation keywords for Wired Headphone / Earphone indicator controls\n    val wiredHeadphoneCandidateLabels = listOf(\n        \"Wired headset\",\n        \"Wired headphones\",\n        \"Headset icon\",\n        \"Earphones\",\n        \"Headphone indicator\",\n        \"Wired audio indicator\",\n        \"Connected audio device icon\",\n        \"Headphones\",\n        \"Headset\",\n        \"Earphone icon\",\n        \"Audio jack icon\"\n    )\n\n    /**\n     * Strict safety check: Never toggle the battery percentage display option!\n     * The screenshot and specification explicitly demand differentiating between\n     * the actual battery icon vs. the separate \"Show battery percentage\" setting.\n     */\n    fun isBatteryPercentageOption(text: String): Boolean {\n        val lower = text.lowercase(Locale.ROOT)\n        return lower.contains(\"percentage\") || lower.contains(\"percent\")\n    }\n\n    /**\n     * Checks if a label inside the status bar page is a known non-icon control\n     * (such as general page headers, back buttons, or navigation items).\n     */\n    fun isDisallowedStatusIconRow(text: String): Boolean {\n        if (isBatteryPercentageOption(text)) return true\n        val lower = text.lowercase(Locale.ROOT)\n        val prohibited = listOf(\n            \"notifications\", \"lock screen\", \"banner\", \"badges\",\n            \"more settings\", \"manage notifications\", \"app notifications\"\n        )\n        return prohibited.any { lower.contains(it) }\n    }\n\n    /**\n     * Checks if a label represents an audio or headphone indicator setting.\n     */\n    fun isHeadphoneRelatedLabel(text: String): Boolean {\n        val lower = text.lowercase(Locale.ROOT)\n        return wiredHeadphoneCandidateLabels.any { lower.contains(it.lowercase(Locale.ROOT)) }\n    }\n\n    fun matchesAny(text: CharSequence?, candidates: List<String>): Boolean {\n        if (text == null) return false\n        val trimmed = text.toString().trim()\n        return candidates.any { candidate ->\n            trimmed.equals(candidate, ignoreCase = true) ||\n                    trimmed.contains(candidate, ignoreCase = true)\n        }\n    }\n}\n"
   },
   {
-    path: 'app/src/main/res/xml/status_bar_accessibility_service_config.xml',
-    name: 'status_bar_accessibility_service_config.xml',
-    language: 'xml',
-    category: 'Manifest & Resources',
-    content: `<?xml version="1.0" encoding="utf-8"?>
-<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
-    android:description="@string/accessibility_service_description"
-    android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged|typeViewClicked|typeViewScrolled"
-    android:accessibilityFeedbackType="feedbackGeneric"
-    android:notificationTimeout="100"
-    android:canRetrieveWindowContent="true"
-    android:canPerformGestures="true"
-    android:accessibilityFlags="flagDefault|flagRetrieveInteractiveWindows|flagReportViewIds"
-    android:settingsActivity="com.statusbarmanager.app.MainActivity" />`
+    "path": "app/src/main/java/com/statusbarmanager/app/automation/OperationCoordinator.kt",
+    "name": "OperationCoordinator.kt",
+    "language": "kotlin",
+    "category": "Kotlin Source",
+    "content": "package com.statusbarmanager.app.automation\n\nimport android.content.Context\nimport android.util.Log\nimport com.statusbarmanager.app.data.DataStoreRepository\nimport com.statusbarmanager.app.data.SettingsBackupManager\nimport com.statusbarmanager.app.service.StatusBarAccessibilityService\nimport com.statusbarmanager.app.widget.StatusBarWidgetProvider\nimport kotlinx.coroutines.flow.StateFlow\n\n/**\n * OBJECTIVE 2: Central Operation Controller.\n * Unified coordinator handling all entry points:\n * - Main application Engage button\n * - Main application Disengage button\n * - Home-screen widget\n * - Quick actions\n *\n * Ensures no duplicate automation, safe partial-failure recovery,\n * and respects the 3 selectable modes: STATUS_BAR_ONLY, FORCE_STOP_APPS_ONLY, BOTH.\n */\nclass OperationCoordinator(\n    private val context: Context,\n    private val dataStoreRepository: DataStoreRepository,\n    private val backupManager: SettingsBackupManager\n) {\n\n    companion object {\n        private const val TAG = \"OperationCoordinator\"\n    }\n\n    val isServiceConnected: StateFlow<Boolean> = StatusBarAccessibilityService.isServiceConnected\n    val progressState: StateFlow<AutomationProgress> = StatusBarAccessibilityService.progressState\n\n    /**\n     * Executes the Engage action according to the currently configured EngageMode.\n     */\n    suspend fun engage(): Boolean {\n        val service = StatusBarAccessibilityService.instance\n        if (service == null) {\n            Log.e(TAG, \"Cannot engage: StatusBarAccessibilityService is not connected\")\n            return false\n        }\n\n        val mode = dataStoreRepository.getEngageMode()\n        Log.i(TAG, \"Initiating Engage with mode: $mode\")\n\n        val targetMode = when (mode) {\n            EngageMode.STATUS_BAR_ONLY -> TargetMode.HideAll\n            EngageMode.FORCE_STOP_APPS_ONLY -> TargetMode.ForceStopOnly\n            EngageMode.BOTH -> TargetMode.BothEngage\n        }\n\n        service.startAutomation(targetMode)\n        StatusBarWidgetProvider.updateAllWidgets(context)\n        return true\n    }\n\n    /**\n     * Executes the Disengage action according to the currently configured EngageMode.\n     * Restores original status bar configuration. NEVER relaunches or restarts stopped apps.\n     */\n    suspend fun disengage(): Boolean {\n        val service = StatusBarAccessibilityService.instance\n        if (service == null) {\n            Log.e(TAG, \"Cannot disengage: StatusBarAccessibilityService is not connected\")\n            return false\n        }\n\n        val mode = dataStoreRepository.getEngageMode()\n        Log.i(TAG, \"Initiating Disengage with mode: $mode\")\n\n        val targetMode = when (mode) {\n            EngageMode.STATUS_BAR_ONLY -> TargetMode.RestoreOriginal\n            EngageMode.FORCE_STOP_APPS_ONLY -> {\n                // In Force Stop Only mode, disengaging performs no app restart\n                dataStoreRepository.setHideActive(false)\n                dataStoreRepository.recordOperation(\"SUCCESS\", \"Apps remain in stopped state. Status bar was untouched.\")\n                StatusBarWidgetProvider.updateAllWidgets(context)\n                return true\n            }\n            EngageMode.BOTH -> TargetMode.BothDisengage\n        }\n\n        service.startAutomation(targetMode)\n        StatusBarWidgetProvider.updateAllWidgets(context)\n        return true\n    }\n}\n"
   },
   {
-    path: 'app/build.gradle.kts',
-    name: 'app/build.gradle.kts',
-    language: 'gradle',
-    category: 'Gradle Build',
-    content: `plugins {
-    alias(libs.plugins.android.application)
-    alias(libs.plugins.kotlin.android)
-    alias(libs.plugins.kotlin.compose)
-}
-
-android {
-    namespace = "com.statusbarmanager.app"
-    compileSdk = 35
-
-    defaultConfig {
-        applicationId = "com.statusbarmanager.app"
-        minSdk = 26
-        targetSdk = 35
-        versionCode = 1
-        versionName = "1.0.0"
-        vectorDrawables { useSupportLibrary = true }
-    }
-
-    buildTypes {
-        release {
-            isMinifyEnabled = true
-            isShrinkResources = true
-            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-            signingConfig = signingConfigs.getByName("debug")
-        }
-        debug {
-            applicationIdSuffix = ".debug"
-            isDebuggable = true
-        }
-    }
-    compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_17
-        targetCompatibility = JavaVersion.VERSION_17
-    }
-    kotlinOptions { jvmTarget = "17" }
-    buildFeatures { compose = true }
-}
-
-dependencies {
-    implementation(libs.androidx.core.ktx)
-    implementation(libs.androidx.lifecycle.runtime.ktx)
-    implementation(libs.androidx.lifecycle.viewmodel.compose)
-    implementation(libs.androidx.activity.compose)
-    implementation(platform(libs.androidx.compose.bom))
-    implementation(libs.androidx.ui)
-    implementation(libs.androidx.ui.graphics)
-    implementation(libs.androidx.ui.tooling.preview)
-    implementation(libs.androidx.material3)
-    implementation(libs.androidx.material.icons.extended)
-    implementation(libs.androidx.datastore.preferences)
-    implementation(libs.kotlinx.coroutines.android)
-    debugImplementation(libs.androidx.ui.tooling)
-}`
+    "path": "app/src/main/java/com/statusbarmanager/app/automation/SettingsAutomationManager.kt",
+    "name": "SettingsAutomationManager.kt",
+    "language": "kotlin",
+    "category": "Kotlin Source",
+    "content": "package com.statusbarmanager.app.automation\n\nimport android.accessibilityservice.AccessibilityServiceInfo\nimport android.content.Context\nimport android.content.Intent\nimport android.net.Uri\nimport android.provider.Settings\nimport android.view.accessibility.AccessibilityManager\nimport com.statusbarmanager.app.service.StatusBarAccessibilityService\nimport kotlinx.coroutines.flow.StateFlow\n\nclass SettingsAutomationManager(private val context: Context) {\n\n    val isServiceConnected: StateFlow<Boolean> = StatusBarAccessibilityService.isServiceConnected\n    val progressState: StateFlow<AutomationProgress> = StatusBarAccessibilityService.progressState\n\n    /**\n     * Checks whether the user has enabled the Accessibility Service\n     */\n    fun isAccessibilityPermissionGranted(): Boolean {\n        val am = context.getSystemService(Context.ACCESSIBILITY_SERVICE) as? AccessibilityManager ?: return false\n        val enabledServices = am.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_ALL_MASK)\n        val expectedPackage = context.packageName\n        return enabledServices.any { it.resolveInfo.serviceInfo.packageName == expectedPackage }\n    }\n\n    /**\n     * Checks whether Display over other apps (floating progress overlay) permission is granted\n     */\n    fun canDrawOverlays(): Boolean {\n        return Settings.canDrawOverlays(context)\n    }\n\n    /**\n     * Opens system Accessibility Settings screen\n     */\n    fun openAccessibilitySettings() {\n        val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {\n            flags = Intent.FLAG_ACTIVITY_NEW_TASK\n        }\n        context.startActivity(intent)\n    }\n\n    /**\n     * Opens Display over other apps settings for floating overlay progress\n     */\n    fun openOverlaySettings() {\n        val intent = Intent(\n            Settings.ACTION_MANAGE_OVERLAY_PERMISSION,\n            Uri.parse(\"package:${context.packageName}\")\n        ).apply {\n            flags = Intent.FLAG_ACTIVITY_NEW_TASK\n        }\n        try {\n            context.startActivity(intent)\n        } catch (e: Exception) {\n            val genericIntent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION).apply {\n                flags = Intent.FLAG_ACTIVITY_NEW_TASK\n            }\n            context.startActivity(genericIntent)\n        }\n    }\n\n    /**\n     * Opens direct Settings screen for manual navigation\n     */\n    fun openSystemSettings() {\n        val intent = Intent(Settings.ACTION_SETTINGS).apply {\n            flags = Intent.FLAG_ACTIVITY_NEW_TASK\n        }\n        context.startActivity(intent)\n    }\n\n    /**\n     * Starts the hide or restore automation\n     */\n    fun triggerAutomation(mode: TargetMode): Boolean {\n        val service = StatusBarAccessibilityService.instance\n        if (service == null || !isAccessibilityPermissionGranted()) {\n            return false\n        }\n        service.startAutomation(mode)\n        return true\n    }\n}\n"
   },
   {
-    path: 'README.md',
-    name: 'README.md',
-    language: 'markdown',
-    category: 'Gradle Build',
-    content: `# StatusBar Manager - Native Android App
-
-A complete native Android application built with Kotlin and Jetpack Compose (Material 3).
-
-## Purpose
-Allows users to automatically hide or restore the clock and status icons displayed in the Android system status bar across the entire phone by automating native settings under:
-
-**Settings → Notifications & status bar → Status bar**
-
-## Architecture Highlights
-- **Accessibility Service**: Dedicated \`StatusBarAccessibilityService\` with \`AccessibilityNodeInfo\` traversal and gesture fallbacks.
-- **Local DataStore Backup**: Preserves exact original Time setting, Real-time network speed, and individual icon states.
-- **Adaptive OEM Compatibility**: Detects ColorOS/OxygenOS, One UI, HyperOS, and Pixel settings labels.
-- **Strict Privacy**: Zero internet permissions requested, idle outside explicitly requested toggles, no data collection.
-
-## How to Build & Install
-\`\`\`bash
-# Build Debug APK
-./gradlew assembleDebug
-
-# Install via ADB
-adb install app/build/outputs/apk/debug/app-debug.apk
-\`\`\`
-`
+    "path": "app/src/main/java/com/statusbarmanager/app/data/DataStoreRepository.kt",
+    "name": "DataStoreRepository.kt",
+    "language": "kotlin",
+    "category": "Kotlin Source",
+    "content": "package com.statusbarmanager.app.data\n\nimport android.content.Context\nimport androidx.datastore.core.DataStore\nimport androidx.datastore.preferences.core.*\nimport androidx.datastore.preferences.preferencesDataStore\nimport com.statusbarmanager.app.automation.EngageMode\nimport kotlinx.coroutines.flow.Flow\nimport kotlinx.coroutines.flow.catch\nimport kotlinx.coroutines.flow.first\nimport kotlinx.coroutines.flow.map\nimport java.io.IOException\n\nval Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = \"status_bar_manager_prefs\")\n\nclass DataStoreRepository(private val context: Context) {\n\n    private object PreferencesKeys {\n        val IS_HIDE_ACTIVE = booleanPreferencesKey(\"is_hide_active\")\n        val HAS_VALID_BACKUP = booleanPreferencesKey(\"has_valid_backup\")\n        val BACKUP_TIMESTAMP = longPreferencesKey(\"backup_timestamp\")\n        val ORIGINAL_TIME_SETTING = stringPreferencesKey(\"original_time_setting\")\n        val ORIGINAL_NETWORK_SPEED = booleanPreferencesKey(\"original_network_speed\")\n        val ORIGINAL_ICONS_SERIALIZED = stringPreferencesKey(\"original_icons_serialized\")\n        val LAST_OPERATION_STATUS = stringPreferencesKey(\"last_operation_status\")\n        val LAST_OPERATION_MESSAGE = stringPreferencesKey(\"last_operation_message\")\n        val LAST_OPERATION_TIMESTAMP = longPreferencesKey(\"last_operation_timestamp\")\n        val DEVICE_PROFILE = stringPreferencesKey(\"device_profile\")\n        val HAS_HEADPHONE_CONTROL = booleanPreferencesKey(\"has_headphone_control\")\n        val ORIGINAL_HEADPHONE_SETTING = booleanPreferencesKey(\"original_headphone_setting\")\n        val IS_PARTIAL_RESULT = booleanPreferencesKey(\"is_partial_result\")\n        \n        // Objective 1 & 2: Engage Mode and Whitelist\n        val ENGAGE_MODE = stringPreferencesKey(\"engage_mode\")\n        val WHITELIST_PACKAGES = stringSetPreferencesKey(\"whitelist_packages\")\n        val LAST_FORCE_STOP_STATS = stringPreferencesKey(\"last_force_stop_stats\")\n    }\n\n    val engageModeFlow: Flow<EngageMode> = context.dataStore.data\n        .catch { exception ->\n            if (exception is IOException) emit(emptyPreferences()) else throw exception\n        }\n        .map { preferences ->\n            val modeStr = preferences[PreferencesKeys.ENGAGE_MODE] ?: EngageMode.BOTH.name\n            EngageMode.fromString(modeStr)\n        }\n\n    val whitelistFlow: Flow<Set<String>> = context.dataStore.data\n        .catch { exception ->\n            if (exception is IOException) emit(emptyPreferences()) else throw exception\n        }\n        .map { preferences ->\n            preferences[PreferencesKeys.WHITELIST_PACKAGES] ?: emptySet()\n        }\n\n    val isHideActiveFlow: Flow<Boolean> = context.dataStore.data\n        .catch { exception ->\n            if (exception is IOException) emit(emptyPreferences()) else throw exception\n        }\n        .map { preferences ->\n            preferences[PreferencesKeys.IS_HIDE_ACTIVE] ?: false\n        }\n\n    val hasBackupFlow: Flow<Boolean> = context.dataStore.data\n        .catch { exception ->\n            if (exception is IOException) emit(emptyPreferences()) else throw exception\n        }\n        .map { preferences ->\n            preferences[PreferencesKeys.HAS_VALID_BACKUP] ?: false\n        }\n\n    val backupModelFlow: Flow<StatusBarBackupModel?> = context.dataStore.data\n        .catch { exception ->\n            if (exception is IOException) emit(emptyPreferences()) else throw exception\n        }\n        .map { preferences ->\n            val hasBackup = preferences[PreferencesKeys.HAS_VALID_BACKUP] ?: false\n            if (!hasBackup) return@map null\n\n            val time = preferences[PreferencesKeys.ORIGINAL_TIME_SETTING] ?: StatusBarBackupModel.TIME_SHOW_HOURS_MINUTES\n            val speed = preferences[PreferencesKeys.ORIGINAL_NETWORK_SPEED] ?: true\n            val iconsSerialized = preferences[PreferencesKeys.ORIGINAL_ICONS_SERIALIZED] ?: \"\"\n            val iconsMap = deserializeIcons(iconsSerialized)\n            val timestamp = preferences[PreferencesKeys.BACKUP_TIMESTAMP] ?: System.currentTimeMillis()\n            val isHideActive = preferences[PreferencesKeys.IS_HIDE_ACTIVE] ?: false\n            val hasHeadphone = preferences[PreferencesKeys.HAS_HEADPHONE_CONTROL] ?: false\n            val headphoneSetting = preferences[PreferencesKeys.ORIGINAL_HEADPHONE_SETTING]\n            val isPartial = preferences[PreferencesKeys.IS_PARTIAL_RESULT] ?: false\n\n            StatusBarBackupModel(\n                timestamp = timestamp,\n                originalTimeSetting = time,\n                originalRealTimeNetworkSpeed = speed,\n                originalStatusIcons = iconsMap,\n                deviceManufacturer = android.os.Build.MANUFACTURER,\n                deviceModel = android.os.Build.MODEL,\n                androidVersion = android.os.Build.VERSION.SDK_INT,\n                isHideActive = isHideActive,\n                hasHeadphoneControl = hasHeadphone,\n                originalHeadphoneSetting = headphoneSetting,\n                isPartial = isPartial\n            )\n        }\n\n    val lastOperationFlow: Flow<Triple<String, String, Long>> = context.dataStore.data\n        .catch { exception ->\n            if (exception is IOException) emit(emptyPreferences()) else throw exception\n        }\n        .map { preferences ->\n            Triple(\n                preferences[PreferencesKeys.LAST_OPERATION_STATUS] ?: \"IDLE\",\n                preferences[PreferencesKeys.LAST_OPERATION_MESSAGE] ?: \"Ready to configure\",\n                preferences[PreferencesKeys.LAST_OPERATION_TIMESTAMP] ?: 0L\n            )\n        }\n\n    suspend fun setEngageMode(mode: EngageMode) {\n        context.dataStore.edit { preferences ->\n            preferences[PreferencesKeys.ENGAGE_MODE] = mode.name\n        }\n    }\n\n    suspend fun getEngageMode(): EngageMode {\n        val prefs = context.dataStore.data.first()\n        val modeStr = prefs[PreferencesKeys.ENGAGE_MODE] ?: EngageMode.BOTH.name\n        return EngageMode.fromString(modeStr)\n    }\n\n    suspend fun addToWhitelist(packageName: String) {\n        context.dataStore.edit { preferences ->\n            val current = preferences[PreferencesKeys.WHITELIST_PACKAGES] ?: emptySet()\n            preferences[PreferencesKeys.WHITELIST_PACKAGES] = current + packageName\n        }\n    }\n\n    suspend fun removeFromWhitelist(packageName: String) {\n        context.dataStore.edit { preferences ->\n            val current = preferences[PreferencesKeys.WHITELIST_PACKAGES] ?: emptySet()\n            preferences[PreferencesKeys.WHITELIST_PACKAGES] = current - packageName\n        }\n    }\n\n    suspend fun getWhitelist(): Set<String> {\n        val prefs = context.dataStore.data.first()\n        return prefs[PreferencesKeys.WHITELIST_PACKAGES] ?: emptySet()\n    }\n\n    suspend fun saveOriginalBackup(backup: StatusBarBackupModel) {\n        context.dataStore.edit { preferences ->\n            preferences[PreferencesKeys.HAS_VALID_BACKUP] = true\n            preferences[PreferencesKeys.BACKUP_TIMESTAMP] = backup.timestamp\n            preferences[PreferencesKeys.ORIGINAL_TIME_SETTING] = backup.originalTimeSetting\n            preferences[PreferencesKeys.ORIGINAL_NETWORK_SPEED] = backup.originalRealTimeNetworkSpeed\n            preferences[PreferencesKeys.ORIGINAL_ICONS_SERIALIZED] = serializeIcons(backup.originalStatusIcons)\n            preferences[PreferencesKeys.IS_HIDE_ACTIVE] = true\n            preferences[PreferencesKeys.DEVICE_PROFILE] = \"${backup.deviceManufacturer} ${backup.deviceModel} (API ${backup.androidVersion})\"\n            preferences[PreferencesKeys.HAS_HEADPHONE_CONTROL] = backup.hasHeadphoneControl\n            if (backup.originalHeadphoneSetting != null) {\n                preferences[PreferencesKeys.ORIGINAL_HEADPHONE_SETTING] = backup.originalHeadphoneSetting\n            }\n            preferences[PreferencesKeys.IS_PARTIAL_RESULT] = backup.isPartial\n        }\n    }\n\n    suspend fun setHideActive(active: Boolean, isPartial: Boolean = false) {\n        context.dataStore.edit { preferences ->\n            preferences[PreferencesKeys.IS_HIDE_ACTIVE] = active\n            preferences[PreferencesKeys.IS_PARTIAL_RESULT] = isPartial\n        }\n    }\n\n    suspend fun clearBackup() {\n        context.dataStore.edit { preferences ->\n            preferences[PreferencesKeys.HAS_VALID_BACKUP] = false\n            preferences[PreferencesKeys.IS_HIDE_ACTIVE] = false\n            preferences[PreferencesKeys.IS_PARTIAL_RESULT] = false\n            preferences.remove(PreferencesKeys.ORIGINAL_TIME_SETTING)\n            preferences.remove(PreferencesKeys.ORIGINAL_NETWORK_SPEED)\n            preferences.remove(PreferencesKeys.ORIGINAL_ICONS_SERIALIZED)\n            preferences.remove(PreferencesKeys.BACKUP_TIMESTAMP)\n            preferences.remove(PreferencesKeys.HAS_HEADPHONE_CONTROL)\n            preferences.remove(PreferencesKeys.ORIGINAL_HEADPHONE_SETTING)\n        }\n    }\n\n    suspend fun recordOperation(status: String, message: String) {\n        context.dataStore.edit { preferences ->\n            preferences[PreferencesKeys.LAST_OPERATION_STATUS] = status\n            preferences[PreferencesKeys.LAST_OPERATION_MESSAGE] = message\n            preferences[PreferencesKeys.LAST_OPERATION_TIMESTAMP] = System.currentTimeMillis()\n        }\n    }\n\n    private fun serializeIcons(map: Map<String, Boolean>): String {\n        return map.entries.joinToString(\";\") { \"${it.key}=${it.value}\" }\n    }\n\n    private fun deserializeIcons(raw: String): Map<String, Boolean> {\n        if (raw.isBlank()) return emptyMap()\n        return raw.split(\";\").mapNotNull { entry ->\n            val parts = entry.split(\"=\")\n            if (parts.size == 2) {\n                parts[0] to parts[1].toBoolean()\n            } else null\n        }.toMap()\n    }\n}\n"
   },
   {
-    path: '.github/workflows/build-apk.yml',
-    name: 'build-apk.yml',
-    language: 'markdown',
-    category: 'Gradle Build',
-    content: `name: Build debug APK
-
-on:
-  push:
-    branches: [ main, master ]
-  pull_request:
-    branches: [ main, master ]
-  workflow_dispatch:
-
-jobs:
-  build:
-    name: Build debug APK
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Java 17
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: '17'
-          cache: 'gradle'
-
-      # Fix for: "Warning: Failed to find package 'tools'"
-      # Legacy 'tools' package was removed from Android SDK repositories.
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-        with:
-          accept-android-sdk-licenses: true
-          log-accepted-android-sdk-licenses: true
-          packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
-
-      - name: Setup Gradle 8.9
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: "8.9"
-
-      - name: Build Debug APK
-        run: |
-          if [ -d "android" ]; then
-            cd android
-          fi
-          if [ -f "gradle/wrapper/gradle-wrapper.jar" ]; then
-            chmod +x gradlew
-            ./gradlew --no-daemon clean assembleDebug
-          else
-            gradle --no-daemon clean assembleDebug
-          fi
-
-      - name: Upload Debug APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: app-debug
-          path: |
-            app/build/outputs/apk/debug/*.apk
-            android/app/build/outputs/apk/debug/*.apk`
+    "path": "app/src/main/java/com/statusbarmanager/app/data/SettingsBackupManager.kt",
+    "name": "SettingsBackupManager.kt",
+    "language": "kotlin",
+    "category": "Kotlin Source",
+    "content": "package com.statusbarmanager.app.data\n\nimport kotlinx.coroutines.flow.first\n\nclass SettingsBackupManager(private val repository: DataStoreRepository) {\n\n    suspend fun getExistingBackup(): StatusBarBackupModel? {\n        return repository.backupModelFlow.first()\n    }\n\n    suspend fun isHideActive(): Boolean {\n        return repository.isHideActiveFlow.first()\n    }\n\n    suspend fun hasValidBackup(): Boolean {\n        return repository.hasBackupFlow.first()\n    }\n\n    /**\n     * Stores the actual original baseline values before modifying anything.\n     * CRITICAL: Will NOT overwrite an active backup if Hide mode is already enabled!\n     */\n    suspend fun saveBackupIfNotActive(\n        timeSetting: String,\n        networkSpeed: Boolean,\n        icons: Map<String, Boolean>,\n        hasHeadphoneControl: Boolean = false,\n        originalHeadphoneSetting: Boolean? = null,\n        isPartial: Boolean = false\n    ): Boolean {\n        val alreadyActive = isHideActive()\n        if (alreadyActive) {\n            // Already has an original baseline saved, protect it\n            return false\n        }\n\n        val backup = StatusBarBackupModel(\n            originalTimeSetting = timeSetting,\n            originalRealTimeNetworkSpeed = networkSpeed,\n            originalStatusIcons = icons,\n            deviceManufacturer = android.os.Build.MANUFACTURER,\n            deviceModel = android.os.Build.MODEL,\n            androidVersion = android.os.Build.VERSION.SDK_INT,\n            isHideActive = true,\n            hasHeadphoneControl = hasHeadphoneControl,\n            originalHeadphoneSetting = originalHeadphoneSetting,\n            isPartial = isPartial\n        )\n        repository.saveOriginalBackup(backup)\n        return true\n    }\n\n    /**\n     * Marks backup as completed restored and clears it only after verified.\n     */\n    suspend fun markRestoredSuccessfully() {\n        repository.clearBackup()\n    }\n\n    /**\n     * If restoration was partial, retain the backup and record remaining keys.\n     */\n    suspend fun recordPartialRestoration(unrestoredKeys: List<String>) {\n        repository.setHideActive(active = false, isPartial = true)\n        repository.recordOperation(\n            status = \"PARTIAL\",\n            message = \"Partially restored. Pending verification for: ${unrestoredKeys.joinToString(\", \")}\"\n        )\n    }\n}\n"
   },
   {
-    path: 'app/src/main/res/values/colors.xml',
-    name: 'colors.xml',
-    language: 'xml',
-    category: 'Manifest & Resources',
-    content: `<?xml version="1.0" encoding="utf-8"?>
-<resources>
-    <color name="primary">#2563EB</color>
-    <color name="primary_variant">#1D4ED8</color>
-    <color name="secondary">#06B6D4</color>
-    <color name="background_dark">#0B0F17</color>
-    <color name="surface_dark">#111827</color>
-    <color name="text_primary">#F9FAFB</color>
-    <color name="text_secondary">#9CA3AF</color>
-    <color name="ic_launcher_background">#0B0F17</color>
-</resources>`
+    "path": "app/src/main/java/com/statusbarmanager/app/data/StatusBarBackupModel.kt",
+    "name": "StatusBarBackupModel.kt",
+    "language": "kotlin",
+    "category": "Kotlin Source",
+    "content": "package com.statusbarmanager.app.data\n\n/**\n * Model representing a persistent snapshot of the user's status bar configuration\n * prior to applying \"Hide Status Bar Information\".\n */\ndata class StatusBarBackupModel(\n    val id: String = \"backup_v1\",\n    val timestamp: Long = System.currentTimeMillis(),\n    val originalTimeSetting: String, // Exact string read from settings, e.g. \"Show hours and minutes\"\n    val originalRealTimeNetworkSpeed: Boolean, // Exact toggle state read from settings\n    val originalStatusIcons: Map<String, Boolean>, // Complete icon name -> original checked state\n    val deviceManufacturer: String,\n    val deviceModel: String,\n    val androidVersion: Int,\n    val isHideActive: Boolean = false,\n    val verifiedAllRestored: Boolean = false,\n    val hasHeadphoneControl: Boolean = false,\n    val originalHeadphoneSetting: Boolean? = null,\n    val isPartial: Boolean = false\n) {\n    companion object {\n        const val TIME_DO_NOT_SHOW = \"Do not show\"\n        const val TIME_SHOW_HOURS_MINUTES = \"Show hours and minutes\"\n        const val TIME_SHOW_SECONDS = \"Show hours, minutes and seconds\"\n        \n        fun empty(): StatusBarBackupModel = StatusBarBackupModel(\n            originalTimeSetting = TIME_SHOW_HOURS_MINUTES,\n            originalRealTimeNetworkSpeed = true,\n            originalStatusIcons = emptyMap(),\n            deviceManufacturer = android.os.Build.MANUFACTURER,\n            deviceModel = android.os.Build.MODEL,\n            androidVersion = android.os.Build.VERSION.SDK_INT,\n            isHideActive = false,\n            hasHeadphoneControl = false,\n            originalHeadphoneSetting = null,\n            isPartial = false\n        )\n    }\n}\n"
   },
   {
-    path: 'app/src/main/res/drawable/ic_launcher_background.xml',
-    name: 'ic_launcher_background.xml',
-    language: 'xml',
-    category: 'Manifest & Resources',
-    content: `<?xml version="1.0" encoding="utf-8"?>
-<vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="108dp"
-    android:height="108dp"
-    android:viewportWidth="108"
-    android:viewportHeight="108">
-    <path
-        android:fillColor="#0B0F17"
-        android:pathData="M0,0h108v108h-108z" />
-</vector>`
+    "path": "app/src/main/java/com/statusbarmanager/app/service/AutomationOverlayManager.kt",
+    "name": "AutomationOverlayManager.kt",
+    "language": "kotlin",
+    "category": "Kotlin Source",
+    "content": "package com.statusbarmanager.app.service\n\nimport android.app.NotificationChannel\nimport android.app.NotificationManager\nimport android.app.PendingIntent\nimport android.content.Context\nimport android.content.Intent\nimport android.graphics.Color\nimport android.graphics.PixelFormat\nimport android.graphics.drawable.GradientDrawable\nimport android.os.Build\nimport android.os.Handler\nimport android.os.Looper\nimport android.provider.Settings\nimport android.util.TypedValue\nimport android.view.Gravity\nimport android.view.View\nimport android.view.WindowManager\nimport android.widget.*\nimport androidx.core.app.NotificationCompat\nimport com.statusbarmanager.app.MainActivity\nimport com.statusbarmanager.app.automation.AutomationProgress\nimport com.statusbarmanager.app.automation.AutomationStep\n\n/**\n * Manages the floating progress overlay (TYPE_APPLICATION_OVERLAY) shown during automation.\n * OBJECTIVE 3:\n * - Remains visible through Settings navigation, App Info screens, and Force Stop dialogs.\n * - DOES NOT automatically dismiss after 2.2 seconds.\n * - Remains visible upon completion until explicitly dismissed by user via Close button.\n * - Updates in-place without tearing down WindowManager attachment.\n */\nclass AutomationOverlayManager(private val context: Context) {\n\n    companion object {\n        private const val NOTIFICATION_CHANNEL_ID = \"status_bar_manager_channel\"\n        private const val NOTIFICATION_ID = 2001\n    }\n\n    private val windowManager = context.getSystemService(Context.WINDOW_SERVICE) as? WindowManager\n    private val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager\n    private val mainHandler = Handler(Looper.getMainLooper())\n\n    private var overlayView: View? = null\n    private var isOverlayAttached = false\n    private var isMinimized = false\n\n    // UI elements in overlay\n    private var titleView: TextView? = null\n    private var operationView: TextView? = null\n    private var percentageView: TextView? = null\n    private var progressBar: ProgressBar? = null\n    private var statsView: TextView? = null\n    private var appStatsView: TextView? = null\n    private var contentContainer: LinearLayout? = null\n    private var closeButton: Button? = null\n\n    init {\n        createNotificationChannel()\n    }\n\n    private fun createNotificationChannel() {\n        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && notificationManager != null) {\n            val channel = NotificationChannel(\n                NOTIFICATION_CHANNEL_ID,\n                \"Status Bar Automation Progress\",\n                NotificationManager.IMPORTANCE_LOW\n            ).apply {\n                description = \"Shows live progress during status bar & app automation operations\"\n                setShowBadge(false)\n            }\n            notificationManager.createNotificationChannel(channel)\n        }\n    }\n\n    fun canDrawOverlay(): Boolean {\n        return Settings.canDrawOverlays(context)\n    }\n\n    /**\n     * Shows or updates the floating overlay and fallback notification\n     */\n    fun updateProgress(progress: AutomationProgress) {\n        mainHandler.post {\n            // Update Floating Window if permission is granted\n            if (canDrawOverlay()) {\n                ensureOverlayViewCreated()\n                updateOverlayContent(progress)\n            } else {\n                removeOverlayView()\n            }\n\n            // Always update fallback notification\n            updateNotification(progress)\n\n            // NOTE: Automatic 2200ms dismissal has been completely removed!\n            // The overlay now stays visible until the user explicitly taps Close.\n            val isFinished = progress.currentStep == AutomationStep.COMPLETED ||\n                    progress.currentStep == AutomationStep.PARTIAL ||\n                    progress.currentStep == AutomationStep.FAILED\n\n            closeButton?.visibility = if (isFinished) View.VISIBLE else View.GONE\n        }\n    }\n\n    private fun ensureOverlayViewCreated() {\n        if (overlayView != null || windowManager == null) return\n\n        val density = context.resources.displayMetrics.density\n        fun dp(value: Int): Int = (value * density).toInt()\n\n        // Outer Container Card\n        val root = LinearLayout(context).apply {\n            orientation = LinearLayout.VERTICAL\n            val bg = GradientDrawable().apply {\n                setColor(Color.parseColor(\"#0F172A\")) // Dark surface slate-900\n                cornerRadius = dp(16).toFloat()\n                setStroke(dp(1.5f.toInt()), Color.parseColor(\"#3B82F6\")) // Vibrant blue accent\n            }\n            background = bg\n            setPadding(dp(16), dp(12), dp(16), dp(14))\n            elevation = dp(10).toFloat()\n        }\n\n        // Header Row (Title + Percentage + Minimize/Close)\n        val headerRow = LinearLayout(context).apply {\n            orientation = LinearLayout.HORIZONTAL\n            gravity = Gravity.CENTER_VERTICAL\n        }\n\n        val title = TextView(context).apply {\n            text = \"StatusBar Manager – Engage\"\n            setTextColor(Color.parseColor(\"#F8FAFC\"))\n            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f)\n            setTypeface(typeface, android.graphics.Typeface.BOLD)\n            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)\n        }\n        titleView = title\n        headerRow.addView(title)\n\n        val percent = TextView(context).apply {\n            text = \"0%\"\n            setTextColor(Color.parseColor(\"#38BDF8\"))\n            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)\n            setTypeface(typeface, android.graphics.Typeface.BOLD)\n            setPadding(dp(8), 0, dp(10), 0)\n        }\n        percentageView = percent\n        headerRow.addView(percent)\n\n        val minBtn = Button(context).apply {\n            text = \"—\"\n            setTextColor(Color.parseColor(\"#94A3B8\"))\n            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)\n            val btnBg = GradientDrawable().apply {\n                setColor(Color.parseColor(\"#1E293B\"))\n                cornerRadius = dp(6).toFloat()\n            }\n            background = btnBg\n            layoutParams = LinearLayout.LayoutParams(dp(28), dp(26))\n            setPadding(0, 0, 0, 0)\n            setOnClickListener {\n                toggleMinimize()\n            }\n        }\n        headerRow.addView(minBtn)\n\n        val closeBtn = Button(context).apply {\n            text = \"✕\"\n            setTextColor(Color.parseColor(\"#EF4444\"))\n            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)\n            val btnBg = GradientDrawable().apply {\n                setColor(Color.parseColor(\"#1E293B\"))\n                cornerRadius = dp(6).toFloat()\n            }\n            background = btnBg\n            val lp = LinearLayout.LayoutParams(dp(28), dp(26)).apply {\n                setMargins(dp(6), 0, 0, 0)\n            }\n            layoutParams = lp\n            setPadding(0, 0, 0, 0)\n            visibility = View.GONE\n            setOnClickListener {\n                dismiss()\n            }\n        }\n        closeButton = closeBtn\n        headerRow.addView(closeBtn)\n\n        root.addView(headerRow)\n\n        // Expandable Content Body\n        val body = LinearLayout(context).apply {\n            orientation = LinearLayout.VERTICAL\n            setPadding(0, dp(8), 0, 0)\n        }\n        contentContainer = body\n\n        // Determinate Progress Bar\n        val pBar = ProgressBar(context, null, android.R.attr.progressBarStyleHorizontal).apply {\n            isIndeterminate = false\n            max = 100\n            progress = 0\n            layoutParams = LinearLayout.LayoutParams(\n                LinearLayout.LayoutParams.MATCH_PARENT,\n                dp(6)\n            ).apply {\n                setMargins(0, dp(6), 0, dp(8))\n            }\n        }\n        progressBar = pBar\n        body.addView(pBar)\n\n        // Current Operation Text\n        val opText = TextView(context).apply {\n            text = \"Preparing...\"\n            setTextColor(Color.parseColor(\"#E2E8F0\"))\n            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)\n        }\n        operationView = opText\n        body.addView(opText)\n\n        // Detailed Statistics Text (Status Icons)\n        val stats = TextView(context).apply {\n            text = \"Icons: 0 discovered\"\n            setTextColor(Color.parseColor(\"#94A3B8\"))\n            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)\n            setPadding(0, dp(4), 0, 0)\n        }\n        statsView = stats\n        body.addView(stats)\n\n        // Detailed Statistics Text (Applications)\n        val appStats = TextView(context).apply {\n            text = \"Apps: 0 eligible\"\n            setTextColor(Color.parseColor(\"#60A5FA\"))\n            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)\n            setPadding(0, dp(2), 0, 0)\n            visibility = View.GONE\n        }\n        appStatsView = appStats\n        body.addView(appStats)\n\n        root.addView(body)\n        overlayView = root\n\n        // Setup WindowManager LayoutParams (TYPE_APPLICATION_OVERLAY)\n        val params = WindowManager.LayoutParams(\n            WindowManager.LayoutParams.MATCH_PARENT,\n            WindowManager.LayoutParams.WRAP_CONTENT,\n            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,\n            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or\n                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or\n                    WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH,\n            PixelFormat.TRANSLUCENT\n        ).apply {\n            gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL\n            y = dp(24) // Top offset below status bar\n            width = context.resources.displayMetrics.widthPixels - dp(32)\n        }\n\n        try {\n            windowManager.addView(root, params)\n            isOverlayAttached = true\n        } catch (e: Exception) {\n            e.printStackTrace()\n            isOverlayAttached = false\n        }\n    }\n\n    private fun toggleMinimize() {\n        isMinimized = !isMinimized\n        contentContainer?.visibility = if (isMinimized) View.GONE else View.VISIBLE\n    }\n\n    private fun updateOverlayContent(progress: AutomationProgress) {\n        titleView?.text = progress.operationTitle\n        percentageView?.text = \"${progress.percentage}%\"\n        progressBar?.progress = progress.percentage\n        operationView?.text = progress.currentOperation\n\n        val stats = progress.iconStats\n        val statsText = when {\n            stats.discovered > 0 && stats.disabled > 0 ->\n                \"Icons: ${stats.discovered} found | ${stats.disabled} disabled | ${stats.alreadyDisabled} off | ${stats.remaining} left\"\n            stats.discovered > 0 && stats.restored > 0 ->\n                \"Icons: ${stats.discovered} found | ${stats.restored} restored | ${stats.remaining} left\"\n            stats.discovered > 0 ->\n                \"Icons: ${stats.discovered} discovered\"\n            else ->\n                \"Step ${progress.stepIndex} of ${progress.totalSteps}\"\n        }\n        statsView?.text = statsText\n\n        val appStats = progress.appStats\n        if (appStats.totalEligible > 0) {\n            appStatsView?.visibility = View.VISIBLE\n            appStatsView?.text = \"Apps: ${appStats.totalEligible} eligible | ${appStats.successfullyStopped} stopped | ${appStats.alreadyStopped} already off | ${appStats.remaining} left\"\n        } else {\n            appStatsView?.visibility = View.GONE\n        }\n    }\n\n    private fun updateNotification(progress: AutomationProgress) {\n        if (notificationManager == null) return\n\n        val openIntent = Intent(context, MainActivity::class.java).apply {\n            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP\n        }\n        val pendingIntent = PendingIntent.getActivity(\n            context,\n            0,\n            openIntent,\n            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE\n        )\n\n        val isFinished = progress.currentStep == AutomationStep.COMPLETED ||\n                progress.currentStep == AutomationStep.PARTIAL ||\n                progress.currentStep == AutomationStep.FAILED\n\n        val builder = NotificationCompat.Builder(context, NOTIFICATION_CHANNEL_ID)\n            .setSmallIcon(android.R.drawable.ic_menu_manage)\n            .setContentTitle(progress.operationTitle)\n            .setContentText(progress.currentOperation)\n            .setContentIntent(pendingIntent)\n            .setProgress(100, progress.percentage, false)\n            .setOngoing(!isFinished)\n            .setOnlyAlertOnce(true)\n\n        if (progress.appStats.totalEligible > 0) {\n            val aStats = progress.appStats\n            builder.setSubText(\"Apps: ${aStats.successfullyStopped}/${aStats.totalEligible} force-stopped\")\n        } else if (progress.iconStats.discovered > 0) {\n            val stats = progress.iconStats\n            builder.setSubText(\"Icons: ${stats.discovered} found, ${stats.disabled + stats.restored} processed\")\n        }\n\n        try {\n            notificationManager.notify(NOTIFICATION_ID, builder.build())\n        } catch (e: Exception) {\n            // Ignored on missing notification permission\n        }\n    }\n\n    fun dismiss() {\n        removeOverlayView()\n        notificationManager?.cancel(NOTIFICATION_ID)\n    }\n\n    private fun removeOverlayView() {\n        if (isOverlayAttached && overlayView != null && windowManager != null) {\n            try {\n                windowManager.removeView(overlayView)\n            } catch (e: Exception) {\n                e.printStackTrace()\n            }\n            overlayView = null\n            isOverlayAttached = false\n        }\n    }\n}\n"
   },
   {
-    path: 'app/src/main/res/drawable/ic_launcher_foreground.xml',
-    name: 'ic_launcher_foreground.xml',
-    language: 'xml',
-    category: 'Manifest & Resources',
-    content: `<?xml version="1.0" encoding="utf-8"?>
-<vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="108dp"
-    android:height="108dp"
-    android:viewportWidth="108"
-    android:viewportHeight="108">
-    <group
-        android:pivotX="54"
-        android:pivotY="54">
-        <path
-            android:fillColor="#1E3A8A"
-            android:fillAlpha="0.3"
-            android:pathData="M54,18 C73.88,18 90,34.12 90,54 C90,73.88 73.88,90 54,90 C34.12,90 18,73.88 18,54 C18,34.12 34.12,18 54,18 Z" />
-        <path
-            android:fillColor="#1E293B"
-            android:strokeColor="#3B82F6"
-            android:strokeWidth="1.5"
-            android:pathData="M37,20 L71,20 A7,7 0 0 1 78,27 L78,81 A7,7 0 0 1 71,88 L37,88 A7,7 0 0 1 30,81 L30,27 A7,7 0 0 1 37,20 Z" />
-        <path
-            android:fillColor="#0B0F17"
-            android:pathData="M33,26 L75,26 L75,82 L33,82 Z" />
-        <path
-            android:fillColor="#64748B"
-            android:pathData="M50,22.5 L58,22.5 A1,1 0 0 1 59,23.5 L59,23.5 A1,1 0 0 1 58,24.5 L50,24.5 A1,1 0 0 1 49,23.5 L49,23.5 A1,1 0 0 1 50,22.5 Z" />
-        <path
-            android:fillColor="#2563EB"
-            android:fillAlpha="0.25"
-            android:pathData="M33,26 L75,26 L75,37 L33,37 Z" />
-        <path
-            android:strokeColor="#2563EB"
-            android:strokeWidth="0.75"
-            android:pathData="M33,37 L75,37" />
-        <path
-            android:strokeColor="#60A5FA"
-            android:strokeWidth="1"
-            android:strokeLineCap="round"
-            android:pathData="M38,31.5 A2.5,2.5 0 1 0 43,31.5 A2.5,2.5 0 1 0 38,31.5" />
-        <path
-            android:strokeColor="#60A5FA"
-            android:strokeWidth="0.8"
-            android:strokeLineCap="round"
-            android:pathData="M40.5,30 L40.5,31.5 L41.8,31.5" />
-        <path
-            android:strokeColor="#38BDF8"
-            android:strokeWidth="0.9"
-            android:strokeLineCap="round"
-            android:pathData="M59,33 A4,4 0 0 1 65,33" />
-        <path
-            android:strokeColor="#38BDF8"
-            android:strokeWidth="0.9"
-            android:strokeLineCap="round"
-            android:pathData="M60.5,34.5 A2,2 0 0 1 63.5,34.5" />
-        <path
-            android:fillColor="#38BDF8"
-            android:pathData="M62,35.5 A0.6,0.6 0 1 0 62,36.7 A0.6,0.6 0 1 0 62,35.5" />
-        <path
-            android:strokeColor="#34D399"
-            android:strokeWidth="0.9"
-            android:pathData="M67,29.5 L72,29.5 A1,1 0 0 1 73,30.5 L73,33.5 A1,1 0 0 1 72,34.5 L67,34.5 A1,1 0 0 1 66,33.5 L66,30.5 A1,1 0 0 1 67,29.5 Z" />
-        <path
-            android:fillColor="#34D399"
-            android:pathData="M73,31.2 L74,31.2 L74,32.8 L73,32.8 Z" />
-        <path
-            android:fillColor="#34D399"
-            android:pathData="M67.5,31 L70.5,31 L70.5,33 L67.5,33 Z" />
-        <path
-            android:fillColor="#1E293B"
-            android:strokeColor="#3B82F6"
-            android:strokeWidth="1.2"
-            android:pathData="M44,52 L64,52 A6,6 0 0 1 70,58 L70,58 A6,6 0 0 1 64,64 L44,64 A6,6 0 0 1 38,58 L38,58 A6,6 0 0 1 44,52 Z" />
-        <path
-            android:fillColor="#38BDF8"
-            android:pathData="M64,58 A4.5,4.5 0 1 0 55,58 A4.5,4.5 0 1 0 64,58 Z" />
-        <path
-            android:strokeColor="#94A3B8"
-            android:strokeWidth="1.2"
-            android:strokeLineCap="round"
-            android:pathData="M43,72 C47,68 61,68 65,72 C61,76 47,76 43,72 Z" />
-        <path
-            android:fillColor="#60A5FA"
-            android:pathData="M54,72 A2,2 0 1 0 54,68 A2,2 0 1 0 54,72 Z" />
-    </group>
-</vector>`
+    "path": "app/src/main/java/com/statusbarmanager/app/service/StatusBarAccessibilityService.kt",
+    "name": "StatusBarAccessibilityService.kt",
+    "language": "kotlin",
+    "category": "Kotlin Source",
+    "content": "package com.statusbarmanager.app.service\n\nimport android.accessibilityservice.AccessibilityService\nimport android.accessibilityservice.GestureDescription\nimport android.content.Intent\nimport android.graphics.Path\nimport android.graphics.Rect\nimport android.provider.Settings\nimport android.util.Log\nimport android.view.accessibility.AccessibilityEvent\nimport android.view.accessibility.AccessibilityNodeInfo\nimport com.statusbarmanager.app.automation.*\nimport com.statusbarmanager.app.data.DataStoreRepository\nimport com.statusbarmanager.app.data.SettingsBackupManager\nimport com.statusbarmanager.app.data.StatusBarBackupModel\nimport kotlinx.coroutines.*\nimport kotlinx.coroutines.flow.MutableStateFlow\nimport kotlinx.coroutines.flow.StateFlow\nimport kotlinx.coroutines.flow.asStateFlow\n\nclass StatusBarAccessibilityService : AccessibilityService() {\n\n    companion object {\n        private const val TAG = \"StatusBarAccService\"\n        const val ACTION_START_AUTOMATION = \"com.statusbarmanager.app.ACTION_START\"\n        const val EXTRA_TARGET_MODE = \"extra_target_mode\"\n\n        var instance: StatusBarAccessibilityService? = null\n            private set\n\n        private val _isServiceConnected = MutableStateFlow(false)\n        val isServiceConnected: StateFlow<Boolean> = _isServiceConnected.asStateFlow()\n\n        private val _progressState = MutableStateFlow(AutomationProgress())\n        val progressState: StateFlow<AutomationProgress> = _progressState.asStateFlow()\n    }\n\n    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)\n    private val compatibilityManager = DeviceCompatibilityManager()\n    private lateinit var dataStoreRepository: DataStoreRepository\n    private lateinit var backupManager: SettingsBackupManager\n    private lateinit var overlayManager: AutomationOverlayManager\n\n    private var currentAutomationJob: Job? = null\n    private var isAutomationRunning = false\n\n    override fun onCreate() {\n        super.onCreate()\n        dataStoreRepository = DataStoreRepository(applicationContext)\n        backupManager = SettingsBackupManager(dataStoreRepository)\n        overlayManager = AutomationOverlayManager(applicationContext)\n        Log.i(TAG, \"StatusBarAccessibilityService created.\")\n    }\n\n    override fun onServiceConnected() {\n        super.onServiceConnected()\n        instance = this\n        _isServiceConnected.value = true\n        Log.i(TAG, \"StatusBarAccessibilityService connected.\")\n    }\n\n    override fun onDestroy() {\n        super.onDestroy()\n        instance = null\n        _isServiceConnected.value = false\n        overlayManager.dismiss()\n        serviceScope.cancel()\n        Log.i(TAG, \"StatusBarAccessibilityService destroyed.\")\n    }\n\n    override fun onAccessibilityEvent(event: AccessibilityEvent?) {\n        if (event == null || !isAutomationRunning) return\n        val packageName = event.packageName?.toString() ?: \"\"\n        if (packageName.contains(\"settings\", ignoreCase = true)) {\n            Log.d(TAG, \"Settings window event: ${event.eventType}\")\n        }\n    }\n\n    override fun onInterrupt() {\n        Log.w(TAG, \"Accessibility Service interrupted.\")\n        cancelAutomation(\"Accessibility service was interrupted by system.\")\n    }\n\n    fun startAutomation(mode: TargetMode) {\n        if (isAutomationRunning) {\n            Log.w(TAG, \"Automation is already running.\")\n            return\n        }\n\n        isAutomationRunning = true\n        currentAutomationJob?.cancel()\n\n        currentAutomationJob = serviceScope.launch {\n            try {\n                executeWorkflow(mode)\n            } catch (e: CancellationException) {\n                Log.i(TAG, \"Automation cancelled.\")\n            } catch (e: Exception) {\n                Log.e(TAG, \"Automation error: ${e.message}\", e)\n                handleAutomationFailure(\"Error: ${e.localizedMessage ?: \"Unknown failure\"}\")\n            } finally {\n                isAutomationRunning = false\n            }\n        }\n    }\n\n    private suspend fun executeWorkflow(mode: TargetMode) = withContext(Dispatchers.Default) {\n        val appManager = ApplicationManager(applicationContext)\n        val forceStopController = AppForceStopAccessibilityController(applicationContext, this@StatusBarAccessibilityService)\n        val userWhitelist = dataStoreRepository.getWhitelist()\n\n        val isHideMode = mode is TargetMode.HideAll || mode is TargetMode.BothEngage\n        val isForceStopMode = mode is TargetMode.ForceStopOnly || mode is TargetMode.BothEngage\n        val isRestoreMode = mode is TargetMode.RestoreOriginal || mode is TargetMode.BothDisengage\n\n        val engageMode = when (mode) {\n            is TargetMode.HideAll, is TargetMode.RestoreOriginal -> EngageMode.STATUS_BAR_ONLY\n            is TargetMode.ForceStopOnly -> EngageMode.FORCE_STOP_APPS_ONLY\n            is TargetMode.BothEngage, is TargetMode.BothDisengage -> EngageMode.BOTH\n        }\n\n        val opTitle = when {\n            mode is TargetMode.BothEngage -> \"StatusBar Manager – Engage (Both)\"\n            mode is TargetMode.BothDisengage -> \"StatusBar Manager – Disengage\"\n            mode is TargetMode.ForceStopOnly -> \"StatusBar Manager – Force Stop Apps\"\n            mode is TargetMode.HideAll -> \"StatusBar Manager – Hide Status Bar\"\n            else -> \"StatusBar Manager – Restore Status Bar\"\n        }\n\n        var checklist = AutomationProgress.forMode(engageMode, isEngage = !isRestoreMode)\n        fun updateChecklist(id: String, status: StepStatus, details: String? = null) {\n            checklist = checklist.map { item ->\n                if (item.id == id) item.copy(status = status, details = details) else item\n            }\n        }\n\n        var currentAppStats = AppForceStopStats()\n\n        fun publish(\n            step: AutomationStep,\n            opDescription: String,\n            percent: Int,\n            stepIdx: Int,\n            iconStats: IconStats = _progressState.value.iconStats,\n            appStats: AppForceStopStats = currentAppStats,\n            headphoneStatus: String = _progressState.value.headphoneStatus,\n            isPartial: Boolean = _progressState.value.isPartialResult\n        ) {\n            val progress = AutomationProgress(\n                currentStep = step,\n                operationTitle = opTitle,\n                currentOperation = opDescription,\n                percentage = percent,\n                stepIndex = stepIdx,\n                totalSteps = checklist.size,\n                checklist = checklist,\n                iconStats = iconStats,\n                appStats = appStats,\n                headphoneStatus = headphoneStatus,\n                isPartialResult = isPartial\n            )\n            _progressState.value = progress\n            overlayManager.updateProgress(progress)\n        }\n\n        publish(AutomationStep.STARTING, \"Preparing automation environment...\", 5, 0)\n        delay(400)\n\n        // ----------------------------------------------------\n        // PHASE 1: STATUS BAR AUTOMATION (if applicable)\n        // ----------------------------------------------------\n        var isPartial = false\n        var headphoneStatusText = \"Not checked\"\n        var stats = IconStats()\n\n        if (isHideMode || (isRestoreMode && mode !is TargetMode.ForceStopOnly)) {\n            // Step 1: Open Settings\n            publish(AutomationStep.OPENING_SETTINGS, \"Opening phone Settings...\", 12, 1)\n            launchSettings()\n            delay(1100)\n\n            // Step 2: Locate Notifications & Status Bar\n            publish(AutomationStep.NAVIGATING_TO_NOTIFICATIONS_STATUS_BAR, \"Navigating to Notifications & status bar...\", 18, 2)\n            var reachedSection = navigateToNotificationsAndStatusBar()\n            if (!reachedSection) {\n                scrollForward()\n                delay(500)\n                reachedSection = navigateToNotificationsAndStatusBar()\n            }\n            delay(900)\n\n            // Step 3: Enter Status Bar section\n            publish(AutomationStep.NAVIGATING_TO_STATUS_BAR, \"Opening Status bar settings...\", 26, 3)\n            val reachedStatusBar = navigateToStatusBarSection()\n            if (!reachedStatusBar) {\n                throw IllegalStateException(\"Could not find 'Status bar' section in Settings. Please open it manually.\")\n            }\n        }\n        delay(900)\n\n        // Step 4: Baseline backup & Time display handling\n        updateChecklist(\"backup\", StepStatus.IN_PROGRESS)\n        updateChecklist(\"time\", StepStatus.IN_PROGRESS)\n        publish(AutomationStep.READING_BASELINE_SETTINGS, \"Reading current Time display setting...\", 34, 4)\n\n        val actualCurrentTime = readActualCurrentTimeSetting()\n        Log.i(TAG, \"Actual current Time setting detected: '$actualCurrentTime'\")\n\n        // Configure Time display\n        publish(AutomationStep.CONFIGURING_TIME, if (isHideMode) \"Setting Time to 'Do not show'...\" else \"Restoring original Time...\", 40, 4)\n        handleTimeSetting(mode, actualCurrentTime)\n        updateChecklist(\"time\", StepStatus.COMPLETED, if (isHideMode) \"Set to Do not show\" else \"Restored: $actualCurrentTime\")\n        delay(800)\n\n        // Step 5: Network speed toggle\n        updateChecklist(\"speed\", StepStatus.IN_PROGRESS)\n        publish(AutomationStep.CONFIGURING_NETWORK_SPEED, \"Checking Real-time network speed...\", 46, 5)\n        val actualNetworkSpeed = handleNetworkSpeedSetting(mode)\n        updateChecklist(\"speed\", StepStatus.COMPLETED, if (isHideMode) \"Disabled\" else \"Restored\")\n        delay(700)\n\n        // Step 6: Comprehensive Status Icons Discovery & Toggle\n        updateChecklist(\"scan_icons\", StepStatus.IN_PROGRESS)\n        publish(AutomationStep.NAVIGATING_TO_STATUS_ICONS, \"Accessing Status icons submenu...\", 52, 6)\n\n        val navigatedToIcons = navigateIntoStatusIconsSubmenu()\n        delay(800)\n\n        publish(AutomationStep.DISCOVERING_ALL_STATUS_ICONS, \"Discovering all available status icons...\", 58, 6)\n        // Dynamically discover all checkable switch rows with scrolling\n        val discoveredIconsMap = discoverAllStatusIconRows()\n        Log.i(TAG, \"Total status icons dynamically discovered: ${discoveredIconsMap.size} -> ${discoveredIconsMap.keys}\")\n\n        val discoveredCount = discoveredIconsMap.size\n        val alreadyDisabledCount = discoveredIconsMap.values.count { !it }\n        var stats = IconStats(\n            discovered = discoveredCount,\n            disabled = 0,\n            alreadyDisabled = alreadyDisabledCount,\n            restored = 0,\n            remaining = if (isHideMode) (discoveredCount - alreadyDisabledCount) else discoveredCount\n        )\n        updateChecklist(\"scan_icons\", StepStatus.COMPLETED, \"$discoveredCount icons discovered\")\n        publish(AutomationStep.DISCOVERING_ALL_STATUS_ICONS, \"Discovered $discoveredCount status icons\", 65, 6, iconStats = stats)\n\n        // Save baseline BEFORE changing any icons if hide mode and no backup exists\n        if (isHideMode) {\n            val existing = backupManager.getExistingBackup()\n            if (existing == null) {\n                backupManager.saveBackupIfNotActive(\n                    timeSetting = actualCurrentTime,\n                    networkSpeed = actualNetworkSpeed,\n                    icons = discoveredIconsMap\n                )\n                updateChecklist(\"backup\", StepStatus.COMPLETED, \"Baseline snapshot preserved\")\n            } else {\n                updateChecklist(\"backup\", StepStatus.COMPLETED, \"Existing baseline protected\")\n            }\n        }\n\n        // Toggle / Restore icons\n        updateChecklist(\"toggle_icons\", StepStatus.IN_PROGRESS)\n        if (isHideMode) {\n            publish(AutomationStep.DISABLING_ALL_STATUS_ICONS, \"Disabling all active status icons...\", 70, 6, iconStats = stats)\n            stats = disableAllActiveStatusIcons(discoveredIconsMap) { updatedStats, currentLabel ->\n                stats = updatedStats\n                val pct = 70 + (20 * updatedStats.disabled / maxOf(1, updatedStats.discovered - updatedStats.alreadyDisabled))\n                publish(\n                    AutomationStep.DISABLING_ALL_STATUS_ICONS,\n                    \"Disabling '$currentLabel' (${updatedStats.disabled}/${updatedStats.discovered - updatedStats.alreadyDisabled})...\",\n                    minOf(90, pct),\n                    6,\n                    iconStats = updatedStats\n                )\n            }\n            updateChecklist(\"toggle_icons\", StepStatus.COMPLETED, \"${stats.disabled} icons turned OFF, ${stats.alreadyDisabled} already OFF\")\n        } else {\n            publish(AutomationStep.RESTORING_ALL_STATUS_ICONS, \"Restoring icons to original states...\", 70, 6, iconStats = stats)\n            val originalBackup = backupManager.getExistingBackup()\n            val targetMap = originalBackup?.originalStatusIcons ?: discoveredIconsMap\n            stats = restoreAllStatusIconsToBaseline(targetMap) { updatedStats, currentLabel ->\n                stats = updatedStats\n                val pct = 70 + (20 * updatedStats.restored / maxOf(1, updatedStats.discovered))\n                publish(\n                    AutomationStep.RESTORING_ALL_STATUS_ICONS,\n                    \"Restoring '$currentLabel' (${updatedStats.restored}/${updatedStats.discovered})...\",\n                    minOf(90, pct),\n                    6,\n                    iconStats = updatedStats\n                )\n            }\n            updateChecklist(\"toggle_icons\", StepStatus.COMPLETED, \"${stats.restored} icons restored to exact baseline\")\n        }\n\n        // Return from Status icons submenu if entered\n        if (navigatedToIcons) {\n            performGlobalAction(GLOBAL_ACTION_BACK)\n            delay(600)\n        }\n\n        // ----------------------------------------------------\n        // PHASE 2: APPLICATION FORCE STOP AUTOMATION (if applicable)\n        // ----------------------------------------------------\n        if (isForceStopMode) {\n            updateChecklist(\"scan_apps\", StepStatus.IN_PROGRESS)\n            updateChecklist(\"apps\", StepStatus.IN_PROGRESS)\n            publish(AutomationStep.SCANNING_APPLICATIONS, \"Scanning eligible user applications...\", 60, 5, iconStats = stats)\n            \n            val eligibleApps = appManager.getEligibleAppsForForceStop(userWhitelist)\n            Log.i(TAG, \"Discovered ${eligibleApps.size} eligible applications for force-stop batch\")\n            updateChecklist(\"scan_apps\", StepStatus.COMPLETED, \"${eligibleApps.size} eligible apps\")\n\n            currentAppStats = currentAppStats.copy(\n                totalEligible = eligibleApps.size,\n                remaining = eligibleApps.size\n            )\n\n            if (eligibleApps.isNotEmpty()) {\n                var stoppedCount = 0\n                var alreadyStoppedCount = 0\n                var failedCount = 0\n\n                updateChecklist(\"force_stop\", StepStatus.IN_PROGRESS)\n\n                eligibleApps.forEachIndexed { idx, app ->\n                    val appProgressPercent = 60 + ((idx + 1) * 35 / eligibleApps.size)\n                    currentAppStats = currentAppStats.copy(\n                        currentAppName = app.appName,\n                        remaining = eligibleApps.size - idx\n                    )\n\n                    publish(\n                        AutomationStep.FORCE_STOPPING_APPS,\n                        \"Force-stopping ${app.appName} (${idx + 1}/${eligibleApps.size})...\",\n                        appProgressPercent,\n                        6,\n                        iconStats = stats,\n                        appStats = currentAppStats\n                    )\n\n                    val result = forceStopController.forceStopApp(app)\n                    when (result) {\n                        ForceStopResult.SUCCESSFULLY_STOPPED -> {\n                            stoppedCount++\n                            currentAppStats = currentAppStats.copy(successfullyStopped = stoppedCount)\n                        }\n                        ForceStopResult.ALREADY_STOPPED -> {\n                            alreadyStoppedCount++\n                            currentAppStats = currentAppStats.copy(alreadyStopped = alreadyStoppedCount)\n                        }\n                        ForceStopResult.FAILED_OPENING_SETTINGS,\n                        ForceStopResult.FAILED_CONFIRMATION,\n                        ForceStopResult.UNAVAILABLE_OR_DISABLED -> {\n                            failedCount++\n                            currentAppStats = currentAppStats.copy(failed = failedCount)\n                            isPartial = true\n                        }\n                        else -> { }\n                    }\n                    delay(300)\n                }\n\n                currentAppStats = currentAppStats.copy(remaining = 0)\n                val appSummary = \"$stoppedCount stopped, $alreadyStoppedCount already off, $failedCount failed\"\n                updateChecklist(\"force_stop\", if (failedCount == 0) StepStatus.COMPLETED else StepStatus.PARTIAL, appSummary)\n                updateChecklist(\"apps\", if (failedCount == 0) StepStatus.COMPLETED else StepStatus.PARTIAL, appSummary)\n            } else {\n                updateChecklist(\"force_stop\", StepStatus.COMPLETED, \"0 eligible apps to process\")\n                updateChecklist(\"apps\", StepStatus.COMPLETED, \"0 eligible apps to process\")\n            }\n        }\n\n        // Final verification & state persistence\n        updateChecklist(\"verify\", StepStatus.IN_PROGRESS)\n        publish(\n            AutomationStep.VERIFYING_CONFIGURATION,\n            \"Verifying applied states and saving records...\",\n            98,\n            7,\n            iconStats = stats,\n            appStats = currentAppStats,\n            headphoneStatus = headphoneStatusText,\n            isPartial = isPartial\n        )\n        delay(600)\n\n        if (isHideMode || isForceStopMode) {\n            dataStoreRepository.setHideActive(active = true, isPartial = isPartial)\n            val logMsg = when {\n                engageMode == EngageMode.FORCE_STOP_APPS_ONLY ->\n                    \"Force stop completed: ${currentAppStats.successfullyStopped} stopped, ${currentAppStats.alreadyStopped} already off\"\n                isPartial ->\n                    \"Engaged with partial result: System-managed headphone or restricted apps reported accurately\"\n                else ->\n                    \"Status bar hidden and eligible applications force-stopped successfully\"\n            }\n            dataStoreRepository.recordOperation(if (isPartial) \"PARTIAL\" else \"SUCCESS\", logMsg)\n            updateChecklist(\"verify\", StepStatus.COMPLETED)\n            publish(\n                if (isPartial) AutomationStep.PARTIAL else AutomationStep.COMPLETED,\n                logMsg,\n                100,\n                7,\n                iconStats = stats,\n                appStats = currentAppStats,\n                headphoneStatus = headphoneStatusText,\n                isPartial = isPartial\n            )\n        } else {\n            backupManager.markRestoredSuccessfully()\n            dataStoreRepository.recordOperation(\"SUCCESS\", \"Original status bar configuration restored successfully. No apps restarted.\")\n            updateChecklist(\"verify\", StepStatus.COMPLETED)\n            publish(\n                AutomationStep.COMPLETED,\n                \"Original configuration restored successfully (stopped apps remain stopped)\",\n                100,\n                7,\n                iconStats = stats,\n                appStats = currentAppStats,\n                headphoneStatus = \"Restored\",\n                isPartial = false\n            )\n        }\n\n        delay(1200)\n        returnToApp()\n    }\n\n    private fun launchSettings() {\n        val intent = Intent(Settings.ACTION_SETTINGS).apply {\n            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP\n        }\n        startActivity(intent)\n    }\n\n    private fun navigateToNotificationsAndStatusBar(): Boolean {\n        val root = rootInActiveWindow ?: return false\n        val node = findNodeMatching(root, compatibilityManager.notificationsAndStatusBarLabels)\n        if (node != null) {\n            val clicked = clickNodeOrParent(node)\n            node.recycle()\n            return clicked\n        }\n        return false\n    }\n\n    private fun navigateToStatusBarSection(): Boolean {\n        val root = rootInActiveWindow ?: return false\n        val node = findNodeMatching(root, compatibilityManager.statusBarSectionLabels)\n        if (node != null) {\n            val clicked = clickNodeOrParent(node)\n            node.recycle()\n            return clicked\n        }\n        return false\n    }\n\n    /**\n     * Reads the actual current Time setting from Settings interface (not hardcoded!)\n     */\n    private suspend fun readActualCurrentTimeSetting(): String {\n        val root = rootInActiveWindow ?: return StatusBarBackupModel.TIME_SHOW_HOURS_MINUTES\n        val timeNode = findNodeMatching(root, compatibilityManager.timeMenuLabels)\n        if (timeNode != null) {\n            val summary = extractSummaryText(timeNode)\n            timeNode.recycle()\n            if (!summary.isNullOrBlank()) {\n                return summary.trim()\n            }\n        }\n        return StatusBarBackupModel.TIME_SHOW_HOURS_MINUTES\n    }\n\n    private suspend fun handleTimeSetting(mode: TargetMode, detectedCurrentTime: String) {\n        val root = rootInActiveWindow ?: return\n        val timeNode = findNodeMatching(root, compatibilityManager.timeMenuLabels) ?: return\n\n        clickNodeOrParent(timeNode)\n        timeNode.recycle()\n        delay(700)\n\n        val dialogRoot = rootInActiveWindow ?: return\n        val targetLabels = if (mode is TargetMode.HideAll) {\n            compatibilityManager.doNotShowLabels\n        } else {\n            val backup = backupManager.getExistingBackup()\n            listOf(backup?.originalTimeSetting ?: detectedCurrentTime)\n        }\n\n        val targetOptionNode = findNodeMatching(dialogRoot, targetLabels)\n        if (targetOptionNode != null) {\n            clickNodeOrParent(targetOptionNode)\n            targetOptionNode.recycle()\n            Log.i(TAG, \"Selected Time option: ${targetLabels.first()}\")\n        } else {\n            Log.w(TAG, \"Could not find Time dialog option for: $targetLabels\")\n            // Dismiss dialog if not found\n            performGlobalAction(GLOBAL_ACTION_BACK)\n        }\n    }\n\n    private suspend fun handleNetworkSpeedSetting(mode: TargetMode): Boolean {\n        val root = rootInActiveWindow ?: return true\n        val speedLabelNode = findNodeMatching(root, compatibilityManager.networkSpeedLabels) ?: return true\n\n        var originalState = true\n        val toggleNode = findAssociatedCheckable(speedLabelNode)\n        if (toggleNode != null) {\n            originalState = toggleNode.isChecked\n            val targetState = if (mode is TargetMode.HideAll) false else {\n                backupManager.getExistingBackup()?.originalRealTimeNetworkSpeed ?: originalState\n            }\n\n            if (toggleNode.isChecked != targetState) {\n                clickNodeOrParent(toggleNode)\n                Log.i(TAG, \"Toggled real-time network speed from ${toggleNode.isChecked} to $targetState\")\n                delay(300)\n            }\n            toggleNode.recycle()\n        }\n        speedLabelNode.recycle()\n        return originalState\n    }\n\n    private suspend fun navigateIntoStatusIconsSubmenu(): Boolean {\n        val root = rootInActiveWindow ?: return false\n        val iconsMenuNode = findNodeMatching(root, compatibilityManager.statusIconsSubmenuLabels)\n        if (iconsMenuNode != null) {\n            val clicked = clickNodeOrParent(iconsMenuNode)\n            iconsMenuNode.recycle()\n            return clicked\n        }\n        return false\n    }\n\n    /**\n     * OBJECTIVE 1: Comprehensive discovery of all available icon switch controls.\n     * Identifies every actual checkable switch control, associates with visible label,\n     * and scrolls through the entire list to catch items below the fold (e.g. VoLTE, VoNR, 5G).\n     */\n    private suspend fun discoverAllStatusIconRows(): Map<String, Boolean> {\n        val discoveredMap = linkedMapOf<String, Boolean>()\n        var previousDiscoveredCount = -1\n        var scrollAttempts = 0\n        val maxScrolls = 6\n\n        while (scrollAttempts < maxScrolls) {\n            val root = rootInActiveWindow ?: break\n            val currentVisible = scanCurrentScreenIconRows(root)\n            discoveredMap.putAll(currentVisible)\n\n            if (discoveredMap.size == previousDiscoveredCount) {\n                // No new items discovered after scroll -> end of list reached\n                break\n            }\n\n            previousDiscoveredCount = discoveredMap.size\n            val scrolled = scrollForward()\n            delay(500)\n            scrollAttempts++\n            if (!scrolled) break\n        }\n\n        // Scroll back to top for modification pass\n        scrollToTop()\n        delay(400)\n        return discoveredMap\n    }\n\n    private fun scanCurrentScreenIconRows(root: AccessibilityNodeInfo): Map<String, Boolean> {\n        val visibleMap = mutableMapOf<String, Boolean>()\n        val queue = ArrayDeque<AccessibilityNodeInfo>()\n        queue.add(root)\n\n        while (queue.isNotEmpty()) {\n            val node = queue.removeFirst()\n\n            if (node.isCheckable) {\n                val label = findLabelForCheckableNode(node)\n                if (label != null && !compatibilityManager.isDisallowedStatusIconRow(label)) {\n                    visibleMap[label] = node.isChecked\n                }\n            }\n\n            for (i in 0 until node.childCount) {\n                node.getChild(i)?.let { queue.add(it) }\n            }\n        }\n        return visibleMap\n    }\n\n    /**\n     * Traverses the row container to associate a switch with its actual visible title.\n     */\n    private fun findLabelForCheckableNode(checkableNode: AccessibilityNodeInfo): String? {\n        var parent: AccessibilityNodeInfo? = checkableNode.parent\n        var depth = 0\n        while (parent != null && depth < 3) {\n            val labelCandidate = extractBestRowLabel(parent, checkableNode)\n            if (labelCandidate != null) {\n                return labelCandidate\n            }\n            parent = parent.parent\n            depth++\n        }\n        return null\n    }\n\n    private fun extractBestRowLabel(container: AccessibilityNodeInfo, checkableNode: AccessibilityNodeInfo): String? {\n        val queue = ArrayDeque<AccessibilityNodeInfo>()\n        queue.add(container)\n        val textCandidates = mutableListOf<String>()\n\n        while (queue.isNotEmpty()) {\n            val node = queue.removeFirst()\n            if (node != checkableNode) {\n                val text = node.text?.toString()?.trim()\n                if (!text.isNullOrBlank() && !node.isCheckable) {\n                    textCandidates.add(text)\n                }\n            }\n            for (i in 0 until node.childCount) {\n                node.getChild(i)?.let { queue.add(it) }\n            }\n        }\n\n        // Return the first candidate that isn't a known summary or percentage\n        return textCandidates.firstOrNull { candidate ->\n            !compatibilityManager.isBatteryPercentageOption(candidate) &&\n                    !candidate.equals(\"ON\", ignoreCase = true) &&\n                    !candidate.equals(\"OFF\", ignoreCase = true)\n        }\n    }\n\n    /**\n     * Turns OFF every enabled icon. Leaves already-disabled icons untouched.\n     */\n    private suspend fun disableAllActiveStatusIcons(\n        discoveredMap: Map<String, Boolean>,\n        onProgress: (IconStats, String) -> Unit\n    ): IconStats {\n        var disabledCount = 0\n        val alreadyDisabledCount = discoveredMap.values.count { !it }\n        val keysToDisable = discoveredMap.filter { it.value }.keys.toMutableSet()\n        val totalToDisable = keysToDisable.size\n\n        var scrollPasses = 0\n        while (keysToDisable.isNotEmpty() && scrollPasses < 6) {\n            val root = rootInActiveWindow ?: break\n            val togglesOnScreen = findAllVisibleToggles(root)\n\n            for ((label, toggleNode) in togglesOnScreen) {\n                if (keysToDisable.contains(label)) {\n                    if (toggleNode.isChecked) {\n                        clickNodeOrParent(toggleNode)\n                        delay(280) // Let switch animation settle\n                        disabledCount++\n                        keysToDisable.remove(label)\n\n                        val remaining = keysToDisable.size\n                        val stats = IconStats(\n                            discovered = discoveredMap.size,\n                            disabled = disabledCount,\n                            alreadyDisabled = alreadyDisabledCount,\n                            restored = 0,\n                            remaining = remaining\n                        )\n                        onProgress(stats, label)\n                    } else {\n                        // Already off\n                        keysToDisable.remove(label)\n                    }\n                }\n            }\n\n            if (keysToDisable.isEmpty()) break\n            val scrolled = scrollForward()\n            delay(400)\n            scrollPasses++\n            if (!scrolled) break\n        }\n\n        return IconStats(\n            discovered = discoveredMap.size,\n            disabled = disabledCount,\n            alreadyDisabled = alreadyDisabledCount,\n            restored = 0,\n            remaining = keysToDisable.size\n        )\n    }\n\n    /**\n     * Restores all status icons to their exact original baseline.\n     */\n    private suspend fun restoreAllStatusIconsToBaseline(\n        targetBaselineMap: Map<String, Boolean>,\n        onProgress: (IconStats, String) -> Unit\n    ): IconStats {\n        var restoredCount = 0\n        val pendingKeys = targetBaselineMap.keys.toMutableSet()\n        val totalToRestore = targetBaselineMap.size\n\n        var scrollPasses = 0\n        while (pendingKeys.isNotEmpty() && scrollPasses < 6) {\n            val root = rootInActiveWindow ?: break\n            val togglesOnScreen = findAllVisibleToggles(root)\n\n            for ((label, toggleNode) in togglesOnScreen) {\n                if (pendingKeys.contains(label)) {\n                    val desiredState = targetBaselineMap[label] ?: false\n                    if (toggleNode.isChecked != desiredState) {\n                        clickNodeOrParent(toggleNode)\n                        delay(280)\n                    }\n                    restoredCount++\n                    pendingKeys.remove(label)\n\n                    val stats = IconStats(\n                        discovered = targetBaselineMap.size,\n                        disabled = 0,\n                        alreadyDisabled = 0,\n                        restored = restoredCount,\n                        remaining = pendingKeys.size\n                    )\n                    onProgress(stats, label)\n                }\n            }\n\n            if (pendingKeys.isEmpty()) break\n            val scrolled = scrollForward()\n            delay(400)\n            scrollPasses++\n            if (!scrolled) break\n        }\n\n        return IconStats(\n            discovered = targetBaselineMap.size,\n            disabled = 0,\n            alreadyDisabled = 0,\n            restored = restoredCount,\n            remaining = pendingKeys.size\n        )\n    }\n\n    private fun findAllVisibleToggles(root: AccessibilityNodeInfo): List<Pair<String, AccessibilityNodeInfo>> {\n        val list = mutableListOf<Pair<String, AccessibilityNodeInfo>>()\n        val queue = ArrayDeque<AccessibilityNodeInfo>()\n        queue.add(root)\n\n        while (queue.isNotEmpty()) {\n            val node = queue.removeFirst()\n            if (node.isCheckable) {\n                val label = findLabelForCheckableNode(node)\n                if (label != null && !compatibilityManager.isDisallowedStatusIconRow(label)) {\n                    list.add(label to node)\n                }\n            }\n            for (i in 0 until node.childCount) {\n                node.getChild(i)?.let { queue.add(it) }\n            }\n        }\n        return list\n    }\n\n    /**\n     * OBJECTIVE 2: Inspects manufacturer settings for wired headphone / earphone visibility controls.\n     * If unexposed by OEM/SystemUI, safely reports as System-managed without disrupting audio.\n     */\n    private data class HeadphoneCheckResult(val isSupported: Boolean, val message: String)\n\n    private suspend fun inspectAndConfigureHeadphoneSetting(mode: TargetMode): HeadphoneCheckResult {\n        val root = rootInActiveWindow ?: return HeadphoneCheckResult(\n            isSupported = false,\n            message = \"System-managed wired headphone icon – no supported visibility control found.\"\n        )\n\n        // Check if any visible or scrollable item matches headphone candidates\n        val headphoneNode = findNodeMatching(root, compatibilityManager.wiredHeadphoneCandidateLabels)\n        if (headphoneNode != null) {\n            val toggle = findAssociatedCheckable(headphoneNode)\n            if (toggle != null) {\n                val isHide = mode is TargetMode.HideAll\n                if (isHide && toggle.isChecked) {\n                    clickNodeOrParent(toggle)\n                    delay(300)\n                } else if (!isHide && !toggle.isChecked) {\n                    clickNodeOrParent(toggle)\n                    delay(300)\n                }\n                toggle.recycle()\n                headphoneNode.recycle()\n                return HeadphoneCheckResult(true, \"Configured wired headphone icon visibility.\")\n            }\n            headphoneNode.recycle()\n        }\n\n        // Standard Android behavior: 3.5mm headphone icon is handled natively by SystemUI AudioManager\n        Log.i(TAG, \"No user-accessible wired headphone visibility setting exposed in OEM Settings.\")\n        return HeadphoneCheckResult(\n            isSupported = false,\n            message = \"System-managed wired headphone icon – no supported visibility control found.\"\n        )\n    }\n\n    private fun findAssociatedCheckable(labelNode: AccessibilityNodeInfo): AccessibilityNodeInfo? {\n        var parent: AccessibilityNodeInfo? = labelNode.parent\n        var depth = 0\n        while (parent != null && depth < 3) {\n            val checkable = findCheckableInChildren(parent, labelNode)\n            if (checkable != null) return checkable\n            parent = parent.parent\n            depth++\n        }\n        return null\n    }\n\n    private fun findCheckableInChildren(container: AccessibilityNodeInfo, exclude: AccessibilityNodeInfo): AccessibilityNodeInfo? {\n        val queue = ArrayDeque<AccessibilityNodeInfo>()\n        queue.add(container)\n        while (queue.isNotEmpty()) {\n            val child = queue.removeFirst()\n            if (child != exclude && child.isCheckable) {\n                return child\n            }\n            for (i in 0 until child.childCount) {\n                child.getChild(i)?.let { queue.add(it) }\n            }\n        }\n        return null\n    }\n\n    private fun extractSummaryText(node: AccessibilityNodeInfo): String? {\n        val parent = node.parent ?: return null\n        for (i in 0 until parent.childCount) {\n            val child = parent.getChild(i) ?: continue\n            val childText = child.text?.toString()?.trim()\n            if (!childText.isNullOrBlank() && childText != node.text?.toString()?.trim()) {\n                parent.recycle()\n                return childText\n            }\n            child.recycle()\n        }\n        parent.recycle()\n        return null\n    }\n\n    private fun findNodeMatching(root: AccessibilityNodeInfo, candidates: List<String>): AccessibilityNodeInfo? {\n        val queue = ArrayDeque<AccessibilityNodeInfo>()\n        queue.add(root)\n\n        while (queue.isNotEmpty()) {\n            val current = queue.removeFirst()\n            val text = current.text\n            val desc = current.contentDescription\n\n            if (compatibilityManager.matchesAny(text, candidates) || compatibilityManager.matchesAny(desc, candidates)) {\n                return current\n            }\n\n            for (i in 0 until current.childCount) {\n                val child = current.getChild(i)\n                if (child != null) queue.add(child)\n            }\n        }\n        return null\n    }\n\n    private fun clickNodeOrParent(node: AccessibilityNodeInfo): Boolean {\n        var current: AccessibilityNodeInfo? = node\n        while (current != null) {\n            if (current.isClickable) {\n                val success = current.performAction(AccessibilityNodeInfo.ACTION_CLICK)\n                if (success) return true\n            }\n            current = current.parent\n        }\n\n        // Gesture fallback based on screen coordinates\n        val bounds = Rect()\n        node.getBoundsInScreen(bounds)\n        if (!bounds.isEmpty) {\n            return dispatchTapGesture(bounds.centerX().toFloat(), bounds.centerY().toFloat())\n        }\n        return false\n    }\n\n    private fun dispatchTapGesture(x: Float, y: Float): Boolean {\n        val path = Path().apply { moveTo(x, y) }\n        val stroke = GestureDescription.StrokeDescription(path, 0, 45)\n        val gesture = GestureDescription.Builder().addStroke(stroke).build()\n        return dispatchGesture(gesture, null, null)\n    }\n\n    private fun scrollForward(): Boolean {\n        val root = rootInActiveWindow ?: return false\n        val scrolled = root.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)\n        root.recycle()\n        return scrolled\n    }\n\n    private fun scrollToTop(): Boolean {\n        val root = rootInActiveWindow ?: return false\n        val scrolled = root.performAction(AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD)\n        root.recycle()\n        return scrolled\n    }\n\n    private fun returnToApp() {\n        val intent = packageManager.getLaunchIntentForPackage(packageName)?.apply {\n            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP\n        }\n        if (intent != null) {\n            startActivity(intent)\n        } else {\n            performGlobalAction(GLOBAL_ACTION_BACK)\n        }\n    }\n\n    private fun handleAutomationFailure(reason: String) {\n        val progress = AutomationProgress(\n            currentStep = AutomationStep.FAILED,\n            operationTitle = \"Automation Error\",\n            currentOperation = reason,\n            percentage = 100,\n            errorReason = reason\n        )\n        _progressState.value = progress\n        overlayManager.updateProgress(progress)\n\n        serviceScope.launch {\n            dataStoreRepository.recordOperation(\"FAILED\", reason)\n        }\n    }\n\n    private fun cancelAutomation(reason: String) {\n        currentAutomationJob?.cancel()\n        handleAutomationFailure(reason)\n    }\n}\n"
   },
   {
-    path: 'app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml',
-    name: 'ic_launcher.xml',
-    language: 'xml',
-    category: 'Manifest & Resources',
-    content: `<?xml version="1.0" encoding="utf-8"?>
-<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
-    <background android:drawable="@color/ic_launcher_background" />
-    <foreground android:drawable="@drawable/ic_launcher_foreground" />
-</adaptive-icon>`
+    "path": "app/src/main/java/com/statusbarmanager/app/ui/screens/BackupDetailsDialog.kt",
+    "name": "BackupDetailsDialog.kt",
+    "language": "kotlin",
+    "category": "Kotlin Source",
+    "content": "package com.statusbarmanager.app.ui.screens\n\nimport androidx.compose.foundation.background\nimport androidx.compose.foundation.layout.*\nimport androidx.compose.foundation.lazy.LazyColumn\nimport androidx.compose.foundation.lazy.items\nimport androidx.compose.foundation.shape.RoundedCornerShape\nimport androidx.compose.material.icons.Icons\nimport androidx.compose.material.icons.filled.Close\nimport androidx.compose.material3.*\nimport androidx.compose.runtime.Composable\nimport androidx.compose.ui.Alignment\nimport androidx.compose.ui.Modifier\nimport androidx.compose.ui.graphics.Color\nimport androidx.compose.ui.text.font.FontWeight\nimport androidx.compose.ui.unit.dp\nimport androidx.compose.ui.window.Dialog\nimport com.statusbarmanager.app.data.StatusBarBackupModel\nimport com.statusbarmanager.app.ui.theme.*\nimport java.text.SimpleDateFormat\nimport java.util.*\n\n@Composable\nfun BackupDetailsDialog(\n    backup: StatusBarBackupModel?,\n    onDismiss: () -> Unit\n) {\n    Dialog(onDismissRequest = onDismiss) {\n        Card(\n            shape = RoundedCornerShape(20.dp),\n            colors = CardDefaults.cardColors(containerColor = DarkSurface),\n            modifier = Modifier\n                .fillMaxWidth()\n                .padding(vertical = 16.dp)\n        ) {\n            Column(\n                modifier = Modifier\n                    .fillMaxWidth()\n                    .padding(20.dp)\n            ) {\n                Row(\n                    modifier = Modifier.fillMaxWidth(),\n                    horizontalArrangement = Arrangement.SpaceBetween,\n                    verticalAlignment = Alignment.CenterVertically\n                ) {\n                    Text(\n                        text = \"Preserved Baseline\",\n                        style = MaterialTheme.typography.titleLarge.copy(\n                            fontWeight = FontWeight.Bold,\n                            color = TextPrimary\n                        )\n                    )\n                    IconButton(onClick = onDismiss) {\n                        Icon(Icons.Default.Close, contentDescription = \"Close\", tint = TextSecondary)\n                    }\n                }\n\n                if (backup == null) {\n                    Text(\n                        text = \"No backup currently saved in DataStore.\",\n                        style = MaterialTheme.typography.bodyMedium.copy(color = TextSecondary),\n                        modifier = Modifier.padding(vertical = 16.dp)\n                    )\n                } else {\n                    val dateStr = SimpleDateFormat(\"MMM dd, yyyy HH:mm:ss\", Locale.getDefault())\n                        .format(Date(backup.timestamp))\n\n                    Text(\n                        text = \"Saved on: $dateStr\",\n                        style = MaterialTheme.typography.labelSmall.copy(color = TextMuted)\n                    )\n                    Text(\n                        text = \"Device: ${backup.deviceManufacturer} ${backup.deviceModel} (Android ${backup.androidVersion})\",\n                        style = MaterialTheme.typography.labelSmall.copy(color = TextMuted)\n                    )\n\n                    Spacer(modifier = Modifier.height(16.dp))\n\n                    Text(\n                        text = \"Configuration Snapshot\",\n                        style = MaterialTheme.typography.titleSmall.copy(\n                            fontWeight = FontWeight.SemiBold,\n                            color = BlueAccent\n                        )\n                    )\n\n                    Spacer(modifier = Modifier.height(8.dp))\n\n                    Column(\n                        modifier = Modifier\n                            .fillMaxWidth()\n                            .background(DarkSurfaceElevated, RoundedCornerShape(12.dp))\n                            .padding(12.dp),\n                        verticalArrangement = Arrangement.spacedBy(8.dp)\n                    ) {\n                        Row(\n                            modifier = Modifier.fillMaxWidth(),\n                            horizontalArrangement = Arrangement.SpaceBetween\n                        ) {\n                            Text(\"Time Setting:\", color = TextSecondary)\n                            Text(backup.originalTimeSetting, color = TextPrimary, fontWeight = FontWeight.Bold)\n                        }\n                        Row(\n                            modifier = Modifier.fillMaxWidth(),\n                            horizontalArrangement = Arrangement.SpaceBetween\n                        ) {\n                            Text(\"Network Speed:\", color = TextSecondary)\n                            Text(\n                                if (backup.originalRealTimeNetworkSpeed) \"Enabled\" else \"Disabled\",\n                                color = TextPrimary,\n                                fontWeight = FontWeight.Bold\n                            )\n                        }\n                        Row(\n                            modifier = Modifier.fillMaxWidth(),\n                            horizontalArrangement = Arrangement.SpaceBetween\n                        ) {\n                            Text(\"Wired Headphones:\", color = TextSecondary)\n                            Text(\n                                if (backup.hasHeadphoneControl) {\n                                    if (backup.originalHeadphoneSetting == true) \"Visible\" else \"Hidden\"\n                                } else {\n                                    \"System-managed\"\n                                },\n                                color = if (backup.hasHeadphoneControl) TextPrimary else WarningAmber,\n                                fontWeight = FontWeight.Bold\n                            )\n                        }\n                    }\n\n                    Spacer(modifier = Modifier.height(16.dp))\n\n                    Text(\n                        text = \"Preserved Status Icons (${backup.originalStatusIcons.size})\",\n                        style = MaterialTheme.typography.titleSmall.copy(\n                            fontWeight = FontWeight.SemiBold,\n                            color = BlueAccent\n                        )\n                    )\n\n                    Spacer(modifier = Modifier.height(8.dp))\n\n                    LazyColumn(\n                        modifier = Modifier\n                            .fillMaxWidth()\n                            .heightIn(max = 200.dp)\n                    ) {\n                        items(backup.originalStatusIcons.entries.toList()) { (icon, wasEnabled) ->\n                            Row(\n                                modifier = Modifier\n                                    .fillMaxWidth()\n                                    .padding(vertical = 4.dp),\n                                horizontalArrangement = Arrangement.SpaceBetween\n                            ) {\n                                Text(icon, color = TextPrimary, style = MaterialTheme.typography.bodySmall)\n                                Text(\n                                    text = if (wasEnabled) \"ON\" else \"OFF\",\n                                    color = if (wasEnabled) SuccessGreen else TextMuted,\n                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold)\n                                )\n                            }\n                        }\n                    }\n                }\n\n                Spacer(modifier = Modifier.height(16.dp))\n\n                Button(\n                    onClick = onDismiss,\n                    modifier = Modifier.fillMaxWidth(),\n                    shape = RoundedCornerShape(10.dp),\n                    colors = ButtonDefaults.buttonColors(containerColor = BluePrimary)\n                ) {\n                    Text(\"Close\", color = Color.White)\n                }\n            }\n        }\n    }\n}\n"
   },
   {
-    path: 'app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml',
-    name: 'ic_launcher_round.xml',
-    language: 'xml',
-    category: 'Manifest & Resources',
-    content: `<?xml version="1.0" encoding="utf-8"?>
-<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
-    <background android:drawable="@color/ic_launcher_background" />
-    <foreground android:drawable="@drawable/ic_launcher_foreground" />
-</adaptive-icon>`
+    "path": "app/src/main/java/com/statusbarmanager/app/ui/screens/ForceStopConfirmationDialog.kt",
+    "name": "ForceStopConfirmationDialog.kt",
+    "language": "kotlin",
+    "category": "Kotlin Source",
+    "content": "package com.statusbarmanager.app.ui.screens\n\nimport androidx.compose.foundation.background\nimport androidx.compose.foundation.border\nimport androidx.compose.foundation.layout.*\nimport androidx.compose.foundation.shape.RoundedCornerShape\nimport androidx.compose.material.icons.Icons\nimport androidx.compose.material.icons.filled.Warning\nimport androidx.compose.material3.*\nimport androidx.compose.runtime.Composable\nimport androidx.compose.ui.Alignment\nimport androidx.compose.ui.Modifier\nimport androidx.compose.ui.draw.clip\nimport androidx.compose.ui.graphics.Color\nimport androidx.compose.ui.text.font.FontWeight\nimport androidx.compose.ui.unit.dp\nimport androidx.compose.ui.unit.sp\nimport androidx.compose.ui.window.Dialog\nimport com.statusbarmanager.app.ui.theme.*\n\n/**\n * OBJECTIVE 2.2: Safety Confirmation Dialog before force-stopping applications.\n * Informs the user about interrupted notifications, unsaved work, and background tasks.\n */\n@Composable\nfun ForceStopConfirmationDialog(\n    eligibleCount: Int,\n    whitelistedCount: Int,\n    protectedCount: Int,\n    onConfirm: () -> Unit,\n    onDismiss: () -> Unit\n) {\n    Dialog(onDismissRequest = onDismiss) {\n        Card(\n            modifier = Modifier\n                .fillMaxWidth()\n                .border(1.dp, WarningAmber.copy(alpha = 0.5f), RoundedCornerShape(20.dp)),\n            shape = RoundedCornerShape(20.dp),\n            colors = CardDefaults.cardColors(containerColor = DarkSurface)\n        ) {\n            Column(\n                modifier = Modifier\n                    .fillMaxWidth()\n                    .padding(20.dp)\n            ) {\n                Row(verticalAlignment = Alignment.CenterVertically) {\n                    Box(\n                        modifier = Modifier\n                            .size(36.dp)\n                            .clip(RoundedCornerShape(10.dp))\n                            .background(WarningAmber.copy(alpha = 0.2f)),\n                        contentAlignment = Alignment.Center\n                    ) {\n                        Icon(\n                            imageVector = Icons.Default.Warning,\n                            contentDescription = null,\n                            tint = WarningAmber,\n                            modifier = Modifier.size(22.dp)\n                        )\n                    }\n                    Spacer(modifier = Modifier.width(12.dp))\n                    Text(\n                        text = \"Confirm Force Stop Batch\",\n                        style = MaterialTheme.typography.titleMedium.copy(\n                            fontWeight = FontWeight.Bold,\n                            color = TextPrimary\n                        )\n                    )\n                }\n\n                Spacer(modifier = Modifier.height(14.dp))\n\n                Text(\n                    text = \"Force-stopping applications terminates their active background tasks, ongoing operations, and push notifications until you reopen them.\",\n                    style = MaterialTheme.typography.bodySmall.copy(color = TextSecondary, lineHeight = 18.sp)\n                )\n\n                Spacer(modifier = Modifier.height(12.dp))\n\n                // Stats summary box\n                Surface(\n                    modifier = Modifier.fillMaxWidth(),\n                    shape = RoundedCornerShape(12.dp),\n                    color = DarkSurfaceElevated\n                ) {\n                    Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {\n                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {\n                            Text(\"Eligible applications to stop:\", style = MaterialTheme.typography.bodySmall.copy(color = TextSecondary))\n                            Text(\"$eligibleCount apps\", style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold, color = BlueAccent))\n                        }\n                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {\n                            Text(\"Manually whitelisted (kept safe):\", style = MaterialTheme.typography.bodySmall.copy(color = TextSecondary))\n                            Text(\"$whitelistedCount apps\", style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold, color = SuccessEmerald))\n                        }\n                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {\n                            Text(\"Protected system & critical roles:\", style = MaterialTheme.typography.bodySmall.copy(color = TextSecondary))\n                            Text(\"$protectedCount apps\", style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold, color = PurpleText))\n                        }\n                    }\n                }\n\n                Spacer(modifier = Modifier.height(12.dp))\n\n                Text(\n                    text = \"No user data will be deleted and no applications will be uninstalled.\",\n                    style = MaterialTheme.typography.labelSmall.copy(color = TextMuted, fontSize = 10.sp)\n                )\n\n                Spacer(modifier = Modifier.height(18.dp))\n\n                Row(\n                    modifier = Modifier.fillMaxWidth(),\n                    horizontalArrangement = Arrangement.spacedBy(10.dp)\n                ) {\n                    OutlinedButton(\n                        onClick = onDismiss,\n                        modifier = Modifier.weight(1f),\n                        shape = RoundedCornerShape(12.dp),\n                        colors = ButtonDefaults.outlinedButtonColors(contentColor = TextSecondary),\n                        border = androidx.compose.foundation.BorderStroke(1.dp, DarkBorder)\n                    ) {\n                        Text(\"Cancel\")\n                    }\n\n                    Button(\n                        onClick = onConfirm,\n                        modifier = Modifier.weight(1f),\n                        shape = RoundedCornerShape(12.dp),\n                        colors = ButtonDefaults.buttonColors(containerColor = WarningAmber, contentColor = Color.Black)\n                    ) {\n                        Text(\"Proceed\", fontWeight = FontWeight.Bold)\n                    }\n                }\n            }\n        }\n    }\n}\n"
   },
   {
-    path: '.github/workflows/android-debug-apk.yml',
-    name: 'android-debug-apk.yml',
-    language: 'markdown',
-    category: 'Gradle Build',
-    content: `name: Build Android APK
-
-on:
-  workflow_dispatch:
-  push:
-    branches:
-      - main
-      - master
-    paths:
-      - "android/**"
-      - ".github/workflows/android-debug-apk.yml"
-  pull_request:
-    branches:
-      - main
-      - master
-    paths:
-      - "android/**"
-      - ".github/workflows/android-debug-apk.yml"
-
-permissions:
-  contents: read
-
-jobs:
-  build:
-    name: Build debug APK
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: "17"
-
-      # Install Android SDK components (avoids removed 'tools' package)
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-        with:
-          packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
-
-      # Consistently provision Gradle 8.9
-      - name: Set up Gradle 8.9
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: "8.9"
-
-      # Execute debug build using installed Gradle 8.9 in the android project directory
-      - name: Build debug APK
-        run: |
-          cd android
-          gradle --no-daemon clean assembleDebug
-
-      # Upload resulting APK artifact
-      - name: Upload debug APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: StatusBar-Manager-debug-apk
-          path: |
-            android/app/build/outputs/apk/debug/*.apk
-            app/build/outputs/apk/debug/*.apk
-          if-no-files-found: error
-          retention-days: 14`
+    "path": "app/src/main/java/com/statusbarmanager/app/ui/screens/MainScreen.kt",
+    "name": "MainScreen.kt",
+    "language": "kotlin",
+    "category": "Kotlin Source",
+    "content": "package com.statusbarmanager.app.ui.screens\n\nimport androidx.compose.animation.AnimatedVisibility\nimport androidx.compose.foundation.background\nimport androidx.compose.foundation.border\nimport androidx.compose.foundation.layout.*\nimport androidx.compose.foundation.rememberScrollState\nimport androidx.compose.foundation.shape.CircleShape\nimport androidx.compose.foundation.shape.RoundedCornerShape\nimport androidx.compose.foundation.verticalScroll\nimport androidx.compose.material.icons.Icons\nimport androidx.compose.material.icons.filled.*\nimport androidx.compose.material3.*\nimport androidx.compose.runtime.*\nimport androidx.compose.ui.Alignment\nimport androidx.compose.ui.Modifier\nimport androidx.compose.ui.draw.clip\nimport androidx.compose.ui.graphics.Color\nimport androidx.compose.ui.text.font.FontWeight\nimport androidx.compose.ui.unit.dp\nimport androidx.compose.ui.unit.sp\nimport com.statusbarmanager.app.automation.*\nimport com.statusbarmanager.app.data.StatusBarBackupModel\nimport com.statusbarmanager.app.ui.theme.*\n\n@OptIn(ExperimentalMaterial3Api::class)\n@Composable\nfun MainScreen(\n    isHideActive: Boolean,\n    hasBackup: Boolean,\n    backupModel: StatusBarBackupModel?,\n    isAccessibilityGranted: Boolean,\n    isOverlayGranted: Boolean,\n    lastOperation: Triple<String, String, Long>,\n    automationProgress: AutomationProgress,\n    compatibilityManager: DeviceCompatibilityManager,\n    engageMode: EngageMode,\n    onSelectEngageMode: (EngageMode) -> Unit,\n    onOpenWhitelist: () -> Unit,\n    onToggleMasterSwitch: (Boolean) -> Unit,\n    onRestoreOriginal: () -> Unit,\n    onRequestAccessibilityPermission: () -> Unit,\n    onRequestOverlayPermission: () -> Unit,\n    onOpenSystemSettings: () -> Unit,\n    onViewBackupDetails: () -> Unit\n) {\n    val scrollState = rememberScrollState()\n    val isRunning = automationProgress.currentStep != AutomationStep.IDLE &&\n            automationProgress.currentStep != AutomationStep.COMPLETED &&\n            automationProgress.currentStep != AutomationStep.PARTIAL &&\n            automationProgress.currentStep != AutomationStep.FAILED\n\n    Scaffold(\n        containerColor = DarkBackground,\n        topBar = {\n            TopAppBar(\n                title = {\n                    Row(verticalAlignment = Alignment.CenterVertically) {\n                        Box(\n                            modifier = Modifier\n                                .size(36.dp)\n                                .clip(RoundedCornerShape(10.dp))\n                                .background(BluePrimary),\n                            contentAlignment = Alignment.Center\n                        ) {\n                            Icon(\n                                imageVector = Icons.Default.VisibilityOff,\n                                contentDescription = null,\n                                tint = Color.White,\n                                modifier = Modifier.size(22.dp)\n                            )\n                        }\n                        Spacer(modifier = Modifier.width(12.dp))\n                        Column {\n                            Text(\n                                text = \"StatusBar Manager\",\n                                style = MaterialTheme.typography.titleLarge.copy(\n                                    fontWeight = FontWeight.Bold,\n                                    color = TextPrimary\n                                )\n                            )\n                            Text(\n                                text = \"Automate Android system status bar settings\",\n                                style = MaterialTheme.typography.labelSmall.copy(color = TextSecondary)\n                            )\n                        }\n                    }\n                },\n                colors = TopAppBarDefaults.topAppBarColors(\n                    containerColor = DarkBackground\n                )\n            )\n        }\n    ) { padding ->\n        Column(\n            modifier = Modifier\n                .fillMaxSize()\n                .padding(padding)\n                .verticalScroll(scrollState)\n                .padding(16.dp),\n            verticalArrangement = Arrangement.spacedBy(16.dp)\n        ) {\n            // Permission Alert Banner if Accessibility missing\n            if (!isAccessibilityGranted) {\n                AccessibilityBanner(onRequestPermission = onRequestAccessibilityPermission)\n            }\n\n            // Prominent Master Switch Card\n            MasterSwitchCard(\n                isHideActive = isHideActive,\n                isRunning = isRunning,\n                isAccessibilityGranted = isAccessibilityGranted,\n                isPartial = backupModel?.isPartial ?: false,\n                onToggle = onToggleMasterSwitch\n            )\n\n            // Live Comprehensive Automation Progress Panel (Objective 3)\n            if (isRunning || automationProgress.currentStep != AutomationStep.IDLE) {\n                LiveAutomationProgressPanel(\n                    progress = automationProgress,\n                    isRunning = isRunning\n                )\n            }\n\n            // System Status Overview Grid\n            StatusOverviewCard(\n                isHideActive = isHideActive,\n                hasBackup = hasBackup,\n                isPartial = backupModel?.isPartial ?: false,\n                isAccessibilityGranted = isAccessibilityGranted,\n                isOverlayGranted = isOverlayGranted,\n                headphoneStatus = automationProgress.headphoneStatus\n            )\n\n            // OBJECTIVE 2: Engage Button Behaviour Card\n            EngageModeCard(\n                currentMode = engageMode,\n                onModeSelected = onSelectEngageMode,\n                onManageWhitelist = onOpenWhitelist\n            )\n\n            // Floating Overlay Permission Card (Display over other apps)\n            if (!isOverlayGranted) {\n                OverlayPermissionCard(onRequestPermission = onRequestOverlayPermission)\n            }\n\n            // Backup & Restoration Card (Objective 4)\n            BackupStatusCard(\n                hasBackup = hasBackup,\n                backup = backupModel,\n                isHideActive = isHideActive,\n                isRunning = isRunning,\n                onRestore = onRestoreOriginal,\n                onViewDetails = onViewBackupDetails\n            )\n\n            // Device Compatibility Card\n            CompatibilityCard(\n                oemName = compatibilityManager.oemDisplayName\n            )\n\n            // Manual Assistance & Settings Quick Actions\n            ManualAssistanceCard(\n                onOpenSettings = onOpenSystemSettings,\n                onRequestAccessibility = onRequestAccessibilityPermission,\n                onRequestOverlay = onRequestOverlayPermission\n            )\n\n            Spacer(modifier = Modifier.height(24.dp))\n        }\n    }\n}\n\n@Composable\nfun MasterSwitchCard(\n    isHideActive: Boolean,\n    isRunning: Boolean,\n    isAccessibilityGranted: Boolean,\n    isPartial: Boolean,\n    onToggle: (Boolean) -> Unit\n) {\n    Card(\n        modifier = Modifier\n            .fillMaxWidth()\n            .border(\n                width = 1.5.dp,\n                color = when {\n                    isPartial -> WarningAmber\n                    isHideActive -> BlueAccent\n                    else -> DarkBorder\n                },\n                shape = RoundedCornerShape(20.dp)\n            ),\n        shape = RoundedCornerShape(20.dp),\n        colors = CardDefaults.cardColors(containerColor = DarkSurface)\n    ) {\n        Column(\n            modifier = Modifier\n                .fillMaxWidth()\n                .padding(20.dp)\n        ) {\n            Row(\n                modifier = Modifier.fillMaxWidth(),\n                verticalAlignment = Alignment.CenterVertically,\n                horizontalArrangement = Arrangement.SpaceBetween\n            ) {\n                Column(modifier = Modifier.weight(1f)) {\n                    Text(\n                        text = \"Hide Status Bar Information\",\n                        style = MaterialTheme.typography.titleLarge.copy(\n                            fontWeight = FontWeight.Bold,\n                            color = TextPrimary\n                        )\n                    )\n                    Spacer(modifier = Modifier.height(4.dp))\n                    Text(\n                        text = when {\n                            isPartial -> \"Clock, network speed & available icons hidden (Wired headphone icon is system-managed).\"\n                            isHideActive -> \"Clock, real-time network speed, and all status icons are currently hidden.\"\n                            else -> \"Disables clock, network speed, VoLTE, SIM, Wi-Fi, battery and all available system status icons.\"\n                        },\n                        style = MaterialTheme.typography.bodyMedium.copy(color = TextSecondary)\n                    )\n                }\n\n                Spacer(modifier = Modifier.width(16.dp))\n\n                Switch(\n                    checked = isHideActive,\n                    onCheckedChange = { onToggle(it) },\n                    enabled = !isRunning && isAccessibilityGranted,\n                    colors = SwitchDefaults.colors(\n                        checkedThumbColor = Color.White,\n                        checkedTrackColor = if (isPartial) WarningAmber else BluePrimary,\n                        uncheckedThumbColor = TextMuted,\n                        uncheckedTrackColor = DarkSurfaceElevated\n                    )\n                )\n            }\n        }\n    }\n}\n\n/**\n * OBJECTIVE 3: Rich Live Progress Panel with horizontal progress bar, percentage,\n * operation checklist, and live icon counters.\n */\n@Composable\nfun LiveAutomationProgressPanel(\n    progress: AutomationProgress,\n    isRunning: Boolean\n) {\n    Card(\n        modifier = Modifier\n            .fillMaxWidth()\n            .border(1.dp, BlueAccent.copy(alpha = 0.5f), RoundedCornerShape(18.dp)),\n        shape = RoundedCornerShape(18.dp),\n        colors = CardDefaults.cardColors(containerColor = DarkSurface)\n    ) {\n        Column(\n            modifier = Modifier\n                .fillMaxWidth()\n                .padding(18.dp)\n        ) {\n            // Header: Title + Percentage\n            Row(\n                modifier = Modifier.fillMaxWidth(),\n                horizontalArrangement = Arrangement.SpaceBetween,\n                verticalAlignment = Alignment.CenterVertically\n            ) {\n                Row(verticalAlignment = Alignment.CenterVertically) {\n                    Icon(\n                        imageVector = when (progress.currentStep) {\n                            AutomationStep.COMPLETED -> Icons.Default.CheckCircle\n                            AutomationStep.PARTIAL -> Icons.Default.Info\n                            AutomationStep.FAILED -> Icons.Default.Error\n                            else -> Icons.Default.Sync\n                        },\n                        contentDescription = null,\n                        tint = when (progress.currentStep) {\n                            AutomationStep.COMPLETED -> SuccessGreen\n                            AutomationStep.PARTIAL -> WarningAmber\n                            AutomationStep.FAILED -> ErrorRed\n                            else -> BlueAccent\n                        },\n                        modifier = Modifier.size(20.dp)\n                    )\n                    Spacer(modifier = Modifier.width(8.dp))\n                    Text(\n                        text = progress.operationTitle.uppercase(),\n                        style = MaterialTheme.typography.labelMedium.copy(\n                            fontWeight = FontWeight.Bold,\n                            color = BlueAccent,\n                            letterSpacing = 1.sp\n                        )\n                    )\n                }\n\n                Text(\n                    text = \"${progress.percentage}%\",\n                    style = MaterialTheme.typography.titleMedium.copy(\n                        fontWeight = FontWeight.ExtraBold,\n                        color = when (progress.currentStep) {\n                            AutomationStep.COMPLETED -> SuccessGreen\n                            AutomationStep.PARTIAL -> WarningAmber\n                            AutomationStep.FAILED -> ErrorRed\n                            else -> BlueAccent\n                        }\n                    )\n                )\n            }\n\n            Spacer(modifier = Modifier.height(10.dp))\n\n            // Determinate Progress Bar\n            LinearProgressIndicator(\n                progress = { progress.percentage / 100f },\n                modifier = Modifier\n                    .fillMaxWidth()\n                    .height(8.dp)\n                    .clip(CircleShape),\n                color = when (progress.currentStep) {\n                    AutomationStep.COMPLETED -> SuccessGreen\n                    AutomationStep.PARTIAL -> WarningAmber\n                    AutomationStep.FAILED -> ErrorRed\n                    else -> BlueAccent\n                },\n                trackColor = DarkSurfaceElevated\n            )\n\n            Spacer(modifier = Modifier.height(10.dp))\n\n            // Current Operation Text\n            Text(\n                text = progress.currentOperation,\n                style = MaterialTheme.typography.bodyMedium.copy(\n                    fontWeight = FontWeight.SemiBold,\n                    color = TextPrimary\n                )\n            )\n\n            // Icon Statistics Counter (Live)\n            if (progress.iconStats.discovered > 0) {\n                Spacer(modifier = Modifier.height(12.dp))\n                IconStatisticsBox(stats = progress.iconStats)\n            }\n\n            Spacer(modifier = Modifier.height(14.dp))\n\n            // Operation Checklist\n            Text(\n                text = \"Process Checklist:\",\n                style = MaterialTheme.typography.labelSmall.copy(\n                    fontWeight = FontWeight.Bold,\n                    color = TextMuted\n                )\n            )\n            Spacer(modifier = Modifier.height(6.dp))\n\n            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {\n                progress.checklist.forEach { item ->\n                    ChecklistRow(item = item)\n                }\n            }\n        }\n    }\n}\n\n@Composable\nfun IconStatisticsBox(stats: IconStats) {\n    Box(\n        modifier = Modifier\n            .fillMaxWidth()\n            .clip(RoundedCornerShape(12.dp))\n            .background(DarkSurfaceElevated)\n            .padding(12.dp)\n    ) {\n        Column {\n            Text(\n                text = \"STATUS ICON METRICS\",\n                style = MaterialTheme.typography.labelSmall.copy(\n                    fontSize = 10.sp,\n                    fontWeight = FontWeight.Bold,\n                    color = TextMuted\n                )\n            )\n            Spacer(modifier = Modifier.height(6.dp))\n            Row(\n                modifier = Modifier.fillMaxWidth(),\n                horizontalArrangement = Arrangement.SpaceBetween\n            ) {\n                StatColumn(label = \"Discovered\", count = stats.discovered, color = BlueAccent)\n                StatColumn(label = \"Disabled\", count = stats.disabled, color = SuccessGreen)\n                StatColumn(label = \"Already Off\", count = stats.alreadyDisabled, color = TextMuted)\n                StatColumn(label = \"Remaining\", count = stats.remaining, color = if (stats.remaining > 0) WarningAmber else SuccessGreen)\n            }\n        }\n    }\n}\n\n@Composable\nfun StatColumn(label: String, count: Int, color: Color) {\n    Column(horizontalAlignment = Alignment.CenterHorizontally) {\n        Text(\n            text = count.toString(),\n            style = MaterialTheme.typography.titleMedium.copy(\n                fontWeight = FontWeight.Bold,\n                color = color\n            )\n        )\n        Text(\n            text = label,\n            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, color = TextSecondary)\n        )\n    }\n}\n\n@Composable\nfun ChecklistRow(item: ProcessChecklistItem) {\n    Row(\n        modifier = Modifier.fillMaxWidth(),\n        verticalAlignment = Alignment.CenterVertically\n    ) {\n        val (icon, color, labelText) = when (item.status) {\n            StepStatus.COMPLETED -> Triple(Icons.Default.CheckCircle, SuccessGreen, \"Completed\")\n            StepStatus.IN_PROGRESS -> Triple(Icons.Default.Sync, BlueAccent, \"In progress\")\n            StepStatus.PARTIAL -> Triple(Icons.Default.Info, WarningAmber, \"Partial\")\n            StepStatus.FAILED -> Triple(Icons.Default.Cancel, ErrorRed, \"Failed\")\n            StepStatus.SKIPPED -> Triple(Icons.Default.RemoveCircleOutline, TextMuted, \"Skipped\")\n            StepStatus.PENDING -> Triple(Icons.Default.RadioButtonUnchecked, TextMuted, \"Pending\")\n        }\n\n        Icon(\n            imageVector = icon,\n            contentDescription = null,\n            tint = color,\n            modifier = Modifier.size(14.dp)\n        )\n        Spacer(modifier = Modifier.width(8.dp))\n        Text(\n            text = item.title,\n            style = MaterialTheme.typography.bodySmall.copy(color = TextPrimary),\n            modifier = Modifier.weight(1f)\n        )\n        Text(\n            text = item.details ?: labelText,\n            style = MaterialTheme.typography.labelSmall.copy(\n                fontWeight = FontWeight.SemiBold,\n                color = color,\n                fontSize = 11.sp\n            )\n        )\n    }\n}\n\n@Composable\nfun StatusOverviewCard(\n    isHideActive: Boolean,\n    hasBackup: Boolean,\n    isPartial: Boolean,\n    isAccessibilityGranted: Boolean,\n    isOverlayGranted: Boolean,\n    headphoneStatus: String\n) {\n    Card(\n        modifier = Modifier.fillMaxWidth(),\n        shape = RoundedCornerShape(16.dp),\n        colors = CardDefaults.cardColors(containerColor = DarkSurface)\n    ) {\n        Column(modifier = Modifier.padding(16.dp)) {\n            Text(\n                text = \"System Status\",\n                style = MaterialTheme.typography.titleMedium.copy(\n                    fontWeight = FontWeight.SemiBold,\n                    color = TextPrimary\n                )\n            )\n            Spacer(modifier = Modifier.height(12.dp))\n\n            Row(\n                modifier = Modifier.fillMaxWidth(),\n                horizontalArrangement = Arrangement.spacedBy(8.dp)\n            ) {\n                // Status Badge\n                val (statusText, statusColor) = when {\n                    isPartial -> \"Partially hidden\" to WarningAmber\n                    isHideActive -> \"Hidden\" to BlueAccent\n                    hasBackup -> \"Baseline active\" to WarningAmber\n                    else -> \"Normal\" to SuccessGreen\n                }\n\n                StatusPill(\n                    label = \"Status\",\n                    value = statusText,\n                    color = statusColor,\n                    modifier = Modifier.weight(1f)\n                )\n\n                // Accessibility Status Pill\n                StatusPill(\n                    label = \"Accessibility\",\n                    value = if (isAccessibilityGranted) \"Active\" to SuccessGreen else \"Disabled\" to ErrorRed,\n                    modifier = Modifier.weight(1f)\n                )\n\n                // Floating Overlay Pill\n                StatusPill(\n                    label = \"Floating Overlay\",\n                    value = if (isOverlayGranted) \"Enabled\" to SuccessGreen else \"Disabled\" to TextMuted,\n                    modifier = Modifier.weight(1f)\n                )\n            }\n\n            // Wired Headphone Limitation Note (Objective 2)\n            if (isPartial || headphoneStatus.contains(\"System-managed\")) {\n                Spacer(modifier = Modifier.height(10.dp))\n                Row(\n                    modifier = Modifier\n                        .fillMaxWidth()\n                        .clip(RoundedCornerShape(8.dp))\n                        .background(DarkSurfaceElevated)\n                        .padding(8.dp),\n                    verticalAlignment = Alignment.CenterVertically\n                ) {\n                    Icon(\n                        imageVector = Icons.Default.Headphones,\n                        contentDescription = null,\n                        tint = WarningAmber,\n                        modifier = Modifier.size(16.dp)\n                    )\n                    Spacer(modifier = Modifier.width(8.dp))\n                    Text(\n                        text = \"Wired headphones: Controlled internally by SystemUI (no OEM setting exposed).\",\n                        style = MaterialTheme.typography.labelSmall.copy(color = TextSecondary, fontSize = 11.sp)\n                    )\n                }\n            }\n        }\n    }\n}\n\n@Composable\nfun StatusPill(\n    label: String,\n    value: Pair<String, Color>,\n    modifier: Modifier = Modifier\n) {\n    Box(\n        modifier = modifier\n            .clip(RoundedCornerShape(12.dp))\n            .background(DarkSurfaceElevated)\n            .padding(horizontal = 10.dp, vertical = 8.dp)\n    ) {\n        Column {\n            Text(\n                text = label.uppercase(),\n                style = MaterialTheme.typography.labelSmall.copy(color = TextMuted, fontSize = 9.sp)\n            )\n            Spacer(modifier = Modifier.height(2.dp))\n            Row(verticalAlignment = Alignment.CenterVertically) {\n                Box(\n                    modifier = Modifier\n                        .size(6.dp)\n                        .clip(CircleShape)\n                        .background(value.second)\n                )\n                Spacer(modifier = Modifier.width(4.dp))\n                Text(\n                    text = value.first,\n                    style = MaterialTheme.typography.bodySmall.copy(\n                        fontWeight = FontWeight.SemiBold,\n                        color = TextPrimary\n                    ),\n                    maxLines = 1\n                )\n            }\n        }\n    }\n}\n\n@Composable\nfun StatusPill(\n    label: String,\n    value: String,\n    color: Color,\n    modifier: Modifier = Modifier\n) {\n    StatusPill(label = label, value = value to color, modifier = modifier)\n}\n\n@Composable\nfun OverlayPermissionCard(onRequestPermission: () -> Unit) {\n    Card(\n        modifier = Modifier\n            .fillMaxWidth()\n            .border(1.dp, BlueAccent.copy(alpha = 0.4f), RoundedCornerShape(16.dp)),\n        shape = RoundedCornerShape(16.dp),\n        colors = CardDefaults.cardColors(containerColor = DarkSurfaceElevated)\n    ) {\n        Row(\n            modifier = Modifier\n                .fillMaxWidth()\n                .padding(14.dp),\n            verticalAlignment = Alignment.CenterVertically\n        ) {\n            Icon(\n                imageVector = Icons.Default.Layers,\n                contentDescription = null,\n                tint = BlueAccent,\n                modifier = Modifier.size(24.dp)\n            )\n            Spacer(modifier = Modifier.width(12.dp))\n            Column(modifier = Modifier.weight(1f)) {\n                Text(\n                    text = \"Floating Live Progress Panel\",\n                    style = MaterialTheme.typography.titleSmall.copy(\n                        fontWeight = FontWeight.Bold,\n                        color = TextPrimary\n                    )\n                )\n                Text(\n                    text = \"Displays live progress on top of Settings while automation runs.\",\n                    style = MaterialTheme.typography.bodySmall.copy(color = TextSecondary, fontSize = 11.sp)\n                )\n            }\n            Spacer(modifier = Modifier.width(8.dp))\n            Button(\n                onClick = onRequestPermission,\n                shape = RoundedCornerShape(8.dp),\n                colors = ButtonDefaults.buttonColors(containerColor = BluePrimary),\n                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)\n            ) {\n                Text(\"Enable\", color = Color.White, fontSize = 12.sp)\n            }\n        }\n    }\n}\n\n@Composable\nfun BackupStatusCard(\n    hasBackup: Boolean,\n    backup: StatusBarBackupModel?,\n    isHideActive: Boolean,\n    isRunning: Boolean,\n    onRestore: () -> Unit,\n    onViewDetails: () -> Unit\n) {\n    Card(\n        modifier = Modifier.fillMaxWidth(),\n        shape = RoundedCornerShape(16.dp),\n        colors = CardDefaults.cardColors(containerColor = DarkSurface)\n    ) {\n        Column(modifier = Modifier.padding(16.dp)) {\n            Row(\n                modifier = Modifier.fillMaxWidth(),\n                horizontalArrangement = Arrangement.SpaceBetween,\n                verticalAlignment = Alignment.CenterVertically\n            ) {\n                Text(\n                    text = \"Original Settings Baseline\",\n                    style = MaterialTheme.typography.titleMedium.copy(\n                        fontWeight = FontWeight.SemiBold,\n                        color = TextPrimary\n                    )\n                )\n\n                if (hasBackup) {\n                    TextButton(onClick = onViewDetails) {\n                        Text(\"View Baseline\", color = BlueAccent)\n                    }\n                }\n            }\n\n            Spacer(modifier = Modifier.height(6.dp))\n\n            Text(\n                text = if (hasBackup) {\n                    \"Exact original baseline saved (${backup?.originalStatusIcons?.size ?: 0} icons). Restores Time, speed, and each individual icon.\"\n                } else {\n                    \"No baseline saved yet. A full snapshot of your current settings will be captured before applying Hide mode.\"\n                },\n                style = MaterialTheme.typography.bodyMedium.copy(color = TextSecondary)\n            )\n\n            Spacer(modifier = Modifier.height(14.dp))\n\n            Button(\n                onClick = onRestore,\n                enabled = !isRunning && hasBackup,\n                modifier = Modifier.fillMaxWidth(),\n                shape = RoundedCornerShape(12.dp),\n                colors = ButtonDefaults.buttonColors(\n                    containerColor = DarkSurfaceElevated,\n                    contentColor = TextPrimary\n                )\n            ) {\n                Icon(\n                    imageVector = Icons.Default.Restore,\n                    contentDescription = null,\n                    modifier = Modifier.size(18.dp)\n                )\n                Spacer(modifier = Modifier.width(8.dp))\n                Text(\n                    text = \"Restore Original Settings\",\n                    fontWeight = FontWeight.SemiBold\n                )\n            }\n        }\n    }\n}\n\n@Composable\nfun CompatibilityCard(oemName: String) {\n    Card(\n        modifier = Modifier.fillMaxWidth(),\n        shape = RoundedCornerShape(16.dp),\n        colors = CardDefaults.cardColors(containerColor = DarkSurface)\n    ) {\n        Column(modifier = Modifier.padding(16.dp)) {\n            Row(verticalAlignment = Alignment.CenterVertically) {\n                Icon(\n                    imageVector = Icons.Default.Smartphone,\n                    contentDescription = null,\n                    tint = BlueAccent,\n                    modifier = Modifier.size(20.dp)\n                )\n                Spacer(modifier = Modifier.width(8.dp))\n                Text(\n                    text = \"Device Compatibility & Target\",\n                    style = MaterialTheme.typography.titleMedium.copy(\n                        fontWeight = FontWeight.SemiBold,\n                        color = TextPrimary\n                    )\n                )\n            }\n\n            Spacer(modifier = Modifier.height(6.dp))\n            Text(\n                text = oemName,\n                style = MaterialTheme.typography.bodyLarge.copy(\n                    fontWeight = FontWeight.SemiBold,\n                    color = TextPrimary\n                )\n            )\n            Spacer(modifier = Modifier.height(2.dp))\n            Text(\n                text = \"Target route: Settings → Notifications & status bar → Status bar\",\n                style = MaterialTheme.typography.bodySmall.copy(color = TextSecondary)\n            )\n        }\n    }\n}\n\n@Composable\nfun AccessibilityBanner(onRequestPermission: () -> Unit) {\n    Card(\n        modifier = Modifier\n            .fillMaxWidth()\n            .border(1.dp, ErrorRed.copy(alpha = 0.5f), RoundedCornerShape(16.dp)),\n        shape = RoundedCornerShape(16.dp),\n        colors = CardDefaults.cardColors(containerColor = ErrorRed.copy(alpha = 0.15f))\n    ) {\n        Column(modifier = Modifier.padding(16.dp)) {\n            Row(verticalAlignment = Alignment.CenterVertically) {\n                Icon(\n                    imageVector = Icons.Default.Warning,\n                    contentDescription = null,\n                    tint = ErrorRed,\n                    modifier = Modifier.size(20.dp)\n                )\n                Spacer(modifier = Modifier.width(8.dp))\n                Text(\n                    text = \"Accessibility Permission Required\",\n                    style = MaterialTheme.typography.titleSmall.copy(\n                        fontWeight = FontWeight.Bold,\n                        color = Color.White\n                    )\n                )\n            }\n            Spacer(modifier = Modifier.height(6.dp))\n            Text(\n                text = \"StatusBar Manager requires Accessibility Service permission to navigate system settings on your behalf without requiring root or ADB commands.\",\n                style = MaterialTheme.typography.bodyMedium.copy(color = TextPrimary)\n            )\n            Spacer(modifier = Modifier.height(12.dp))\n            Button(\n                onClick = onRequestPermission,\n                shape = RoundedCornerShape(10.dp),\n                colors = ButtonDefaults.buttonColors(containerColor = ErrorRed)\n            ) {\n                Text(\"Open Accessibility Settings\", color = Color.White)\n            }\n        }\n    }\n}\n\n@Composable\nfun ManualAssistanceCard(\n    onOpenSettings: () -> Unit,\n    onRequestAccessibility: () -> Unit,\n    onRequestOverlay: () -> Unit\n) {\n    Card(\n        modifier = Modifier.fillMaxWidth(),\n        shape = RoundedCornerShape(16.dp),\n        colors = CardDefaults.cardColors(containerColor = DarkSurface)\n    ) {\n        Column(modifier = Modifier.padding(16.dp)) {\n            Text(\n                text = \"System Tools & Navigation\",\n                style = MaterialTheme.typography.titleMedium.copy(\n                    fontWeight = FontWeight.SemiBold,\n                    color = TextPrimary\n                )\n            )\n            Spacer(modifier = Modifier.height(6.dp))\n            Text(\n                text = \"Quick shortcuts to verify your status bar layout manually or configure permissions.\",\n                style = MaterialTheme.typography.bodySmall.copy(color = TextSecondary)\n            )\n            Spacer(modifier = Modifier.height(12.dp))\n            Row(\n                modifier = Modifier.fillMaxWidth(),\n                horizontalArrangement = Arrangement.spacedBy(8.dp)\n            ) {\n                OutlinedButton(\n                    onClick = onOpenSettings,\n                    modifier = Modifier.weight(1f),\n                    shape = RoundedCornerShape(10.dp)\n                ) {\n                    Text(\"Settings\", color = TextPrimary)\n                }\n\n                OutlinedButton(\n                    onClick = onRequestAccessibility,\n                    modifier = Modifier.weight(1f),\n                    shape = RoundedCornerShape(10.dp)\n                ) {\n                    Text(\"Accessibility\", color = TextPrimary)\n                }\n\n                OutlinedButton(\n                    onClick = onRequestOverlay,\n                    modifier = Modifier.weight(1f),\n                    shape = RoundedCornerShape(10.dp)\n                ) {\n                    Text(\"Overlay\", color = TextPrimary)\n                }\n            }\n        }\n    }\n}\n\n/**\n * OBJECTIVE 2: Engage Button Behaviour selector card.\n * Select between:\n * - Status Bar Only\n * - Force Stop Apps Only\n * - Both (Status Bar + Apps)\n */\n@Composable\nfun EngageModeCard(\n    currentMode: EngageMode,\n    onModeSelected: (EngageMode) -> Unit,\n    onManageWhitelist: () -> Unit\n) {\n    Card(\n        modifier = Modifier.fillMaxWidth(),\n        shape = RoundedCornerShape(18.dp),\n        colors = CardDefaults.cardColors(containerColor = DarkSurface),\n        border = androidx.compose.foundation.BorderStroke(1.dp, DarkBorder)\n    ) {\n        Column(modifier = Modifier.padding(18.dp)) {\n            Row(\n                modifier = Modifier.fillMaxWidth(),\n                verticalAlignment = Alignment.CenterVertically,\n                horizontalArrangement = Arrangement.SpaceBetween\n            ) {\n                Row(verticalAlignment = Alignment.CenterVertically) {\n                    Box(\n                        modifier = Modifier\n                            .size(34.dp)\n                            .clip(RoundedCornerShape(8.dp))\n                            .background(BluePrimary.copy(alpha = 0.2f)),\n                        contentAlignment = Alignment.Center\n                    ) {\n                        Icon(\n                            imageVector = Icons.Default.Tune,\n                            contentDescription = null,\n                            tint = BlueAccent,\n                            modifier = Modifier.size(20.dp)\n                        )\n                    }\n                    Spacer(modifier = Modifier.width(10.dp))\n                    Text(\n                        text = \"Engage Button Behaviour\",\n                        style = MaterialTheme.typography.titleMedium.copy(\n                            fontWeight = FontWeight.Bold,\n                            color = TextPrimary\n                        )\n                    )\n                }\n            }\n\n            Spacer(modifier = Modifier.height(6.dp))\n            Text(\n                text = \"Choose what actions execute when the master Engage switch or Home-Screen Widget is activated.\",\n                style = MaterialTheme.typography.bodySmall.copy(color = TextSecondary)\n            )\n\n            Spacer(modifier = Modifier.height(14.dp))\n\n            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {\n                EngageModeRadioItem(\n                    title = \"Both (Status Bar + Force Stop Apps)\",\n                    description = \"Hides status bar and force-stops eligible non-system apps in one smooth batch.\",\n                    isSelected = currentMode == EngageMode.BOTH,\n                    onClick = { onModeSelected(EngageMode.BOTH) }\n                )\n\n                EngageModeRadioItem(\n                    title = \"Status Bar Only\",\n                    description = \"Hides clock, network speed, and status icons. Apps are untouched.\",\n                    isSelected = currentMode == EngageMode.STATUS_BAR_ONLY,\n                    onClick = { onModeSelected(EngageMode.STATUS_BAR_ONLY) }\n                )\n\n                EngageModeRadioItem(\n                    title = \"Force Stop Apps Only\",\n                    description = \"Force-stops non-system apps via Settings. Status bar remains untouched.\",\n                    isSelected = currentMode == EngageMode.FORCE_STOP_APPS_ONLY,\n                    onClick = { onModeSelected(EngageMode.FORCE_STOP_APPS_ONLY) }\n                )\n            }\n\n            Spacer(modifier = Modifier.height(14.dp))\n\n            // Button to open Protected Apps / Whitelist\n            FilledTonalButton(\n                onClick = onManageWhitelist,\n                modifier = Modifier.fillMaxWidth(),\n                shape = RoundedCornerShape(12.dp),\n                colors = ButtonDefaults.filledTonalButtonColors(\n                    containerColor = DarkSurfaceElevated,\n                    contentColor = TextPrimary\n                )\n            ) {\n                Icon(imageVector = Icons.Default.Shield, contentDescription = null, modifier = Modifier.size(16.dp), tint = SuccessEmerald)\n                Spacer(modifier = Modifier.width(8.dp))\n                Text(\"Manage Protected Apps / Whitelist\", fontWeight = FontWeight.SemiBold)\n            }\n        }\n    }\n}\n\n@Composable\nfun EngageModeRadioItem(\n    title: String,\n    description: String,\n    isSelected: Boolean,\n    onClick: () -> Unit\n) {\n    Surface(\n        onClick = onClick,\n        shape = RoundedCornerShape(12.dp),\n        color = if (isSelected) BlueSurface else DarkSurfaceElevated,\n        border = if (isSelected) androidx.compose.foundation.BorderStroke(1.5.dp, BluePrimary) else androidx.compose.foundation.BorderStroke(1.dp, DarkBorder),\n        modifier = Modifier.fillMaxWidth()\n    ) {\n        Row(\n            modifier = Modifier.padding(14.dp),\n            verticalAlignment = Alignment.CenterVertically\n        ) {\n            RadioButton(\n                selected = isSelected,\n                onClick = onClick,\n                colors = RadioButtonDefaults.colors(\n                    selectedColor = BluePrimary,\n                    unselectedColor = TextMuted\n                )\n            )\n            Spacer(modifier = Modifier.width(8.dp))\n            Column {\n                Text(\n                    text = title,\n                    style = MaterialTheme.typography.bodyMedium.copy(\n                        fontWeight = FontWeight.Bold,\n                        color = if (isSelected) TextPrimary else TextSecondary\n                    )\n                )\n                Spacer(modifier = Modifier.height(2.dp))\n                Text(\n                    text = description,\n                    style = MaterialTheme.typography.labelSmall.copy(color = TextMuted)\n                )\n            }\n        }\n    }\n}\n\n"
+  },
+  {
+    "path": "app/src/main/java/com/statusbarmanager/app/ui/screens/OnboardingDialog.kt",
+    "name": "OnboardingDialog.kt",
+    "language": "kotlin",
+    "category": "Kotlin Source",
+    "content": "package com.statusbarmanager.app.ui.screens\n\nimport androidx.compose.foundation.background\nimport androidx.compose.foundation.layout.*\nimport androidx.compose.foundation.shape.RoundedCornerShape\nimport androidx.compose.material.icons.Icons\nimport androidx.compose.material.icons.filled.AccessibilityNew\nimport androidx.compose.material.icons.filled.Check\nimport androidx.compose.material.icons.filled.Security\nimport androidx.compose.material3.*\nimport androidx.compose.runtime.Composable\nimport androidx.compose.ui.Alignment\nimport androidx.compose.ui.Modifier\nimport androidx.compose.ui.graphics.Color\nimport androidx.compose.ui.text.font.FontWeight\nimport androidx.compose.ui.unit.dp\nimport androidx.compose.ui.window.Dialog\nimport com.statusbarmanager.app.ui.theme.*\n\n@Composable\nfun OnboardingDialog(\n    onDismiss: () -> Unit,\n    onOpenSettings: () -> Unit\n) {\n    Dialog(onDismissRequest = onDismiss) {\n        Card(\n            shape = RoundedCornerShape(20.dp),\n            colors = CardDefaults.cardColors(containerColor = DarkSurface),\n            modifier = Modifier.fillMaxWidth()\n        ) {\n            Column(\n                modifier = Modifier.padding(24.dp),\n                horizontalAlignment = Alignment.CenterHorizontally\n            ) {\n                Box(\n                    modifier = Modifier\n                        .size(56.dp)\n                        .background(BlueContainer, RoundedCornerShape(16.dp)),\n                    contentAlignment = Alignment.Center\n                ) {\n                    Icon(\n                        imageVector = Icons.Default.AccessibilityNew,\n                        contentDescription = null,\n                        tint = BlueAccent,\n                        modifier = Modifier.size(32.dp)\n                    )\n                }\n\n                Spacer(modifier = Modifier.height(16.dp))\n\n                Text(\n                    text = \"Accessibility Permission Required\",\n                    style = MaterialTheme.typography.titleLarge.copy(\n                        fontWeight = FontWeight.Bold,\n                        color = TextPrimary\n                    )\n                )\n\n                Spacer(modifier = Modifier.height(12.dp))\n\n                Text(\n                    text = \"StatusBar Manager uses an Android Accessibility Service exclusively to automate navigating to Settings → Notifications & status bar to adjust your status icons.\",\n                    style = MaterialTheme.typography.bodyMedium.copy(color = TextSecondary)\n                )\n\n                Spacer(modifier = Modifier.height(16.dp))\n\n                // Privacy Guarantees\n                PrivacyCheckItem(text = \"Operates only upon your explicit switch toggle\")\n                PrivacyCheckItem(text = \"No personal data, keystrokes, or screen contents captured\")\n                PrivacyCheckItem(text = \"Remains 100% idle outside status bar configuration\")\n                PrivacyCheckItem(text = \"Zero internet access required or requested\")\n\n                Spacer(modifier = Modifier.height(24.dp))\n\n                Row(\n                    modifier = Modifier.fillMaxWidth(),\n                    horizontalArrangement = Arrangement.spacedBy(12.dp)\n                ) {\n                    OutlinedButton(\n                        onClick = onDismiss,\n                        modifier = Modifier.weight(1f),\n                        shape = RoundedCornerShape(10.dp)\n                    ) {\n                        Text(\"Cancel\", color = TextPrimary)\n                    }\n\n                    Button(\n                        onClick = onOpenSettings,\n                        modifier = Modifier.weight(1.5f),\n                        shape = RoundedCornerShape(10.dp),\n                        colors = ButtonDefaults.buttonColors(containerColor = BluePrimary)\n                    ) {\n                        Text(\"Enable Service\", color = Color.White)\n                    }\n                }\n            }\n        }\n    }\n}\n\n@Composable\nfun PrivacyCheckItem(text: String) {\n    Row(\n        modifier = Modifier\n            .fillMaxWidth()\n            .padding(vertical = 4.dp),\n        verticalAlignment = Alignment.Top\n    ) {\n        Icon(\n            imageVector = Icons.Default.Check,\n            contentDescription = null,\n            tint = SuccessGreen,\n            modifier = Modifier.size(16.dp)\n        )\n        Spacer(modifier = Modifier.width(8.dp))\n        Text(\n            text = text,\n            style = MaterialTheme.typography.bodySmall.copy(color = TextPrimary)\n        )\n    }\n}\n"
+  },
+  {
+    "path": "app/src/main/java/com/statusbarmanager/app/ui/screens/WhitelistScreen.kt",
+    "name": "WhitelistScreen.kt",
+    "language": "kotlin",
+    "category": "Kotlin Source",
+    "content": "package com.statusbarmanager.app.ui.screens\n\nimport androidx.compose.foundation.background\nimport androidx.compose.foundation.border\nimport androidx.compose.foundation.layout.*\nimport androidx.compose.foundation.lazy.LazyColumn\nimport androidx.compose.foundation.lazy.items\nimport androidx.compose.foundation.shape.RoundedCornerShape\nimport androidx.compose.material.icons.Icons\nimport androidx.compose.material.icons.filled.*\nimport androidx.compose.material3.*\nimport androidx.compose.runtime.*\nimport androidx.compose.ui.Alignment\nimport androidx.compose.ui.Modifier\nimport androidx.compose.ui.draw.clip\nimport androidx.compose.ui.graphics.Color\nimport androidx.compose.ui.text.font.FontWeight\nimport androidx.compose.ui.unit.dp\nimport androidx.compose.ui.unit.sp\nimport com.statusbarmanager.app.automation.AppItem\nimport com.statusbarmanager.app.ui.theme.*\n\n/**\n * OBJECTIVE 1.2: Protected Apps / Whitelist Management Screen.\n * - Search installed applications\n * - Filter between All, User Installed, and System/Protected\n * - Add/remove applications to/from local DataStore whitelist\n * - Clear counts: Total eligible, whitelisted, system protected\n */\n@OptIn(ExperimentalMaterial3Api::class)\n@Composable\nfun WhitelistScreen(\n    apps: List<AppItem>,\n    whitelist: Set<String>,\n    onToggleWhitelist: (packageName: String) -> Unit,\n    onBack: () -> Unit\n) {\n    var searchQuery by remember { mutableStateOf(\"\") }\n    var selectedFilter by remember { mutableStateOf(\"Eligible\") } // \"Eligible\", \"Whitelisted\", \"System / Protected\"\n\n    val filteredApps = remember(apps, searchQuery, selectedFilter, whitelist) {\n        apps.filter { app ->\n            val matchesSearch = app.appName.contains(searchQuery, ignoreCase = true) ||\n                    app.packageName.contains(searchQuery, ignoreCase = true)\n            if (!matchesSearch) return@filter false\n\n            when (selectedFilter) {\n                \"Eligible\" -> !app.isSystemApp && !app.isProtectedRole && !whitelist.contains(app.packageName)\n                \"Whitelisted\" -> whitelist.contains(app.packageName)\n                \"System / Protected\" -> app.isSystemApp || app.isProtectedRole\n                else -> true\n            }\n        }\n    }\n\n    val totalEligible = apps.count { !it.isSystemApp && !it.isProtectedRole && !whitelist.contains(it.packageName) }\n    val totalWhitelisted = whitelist.size\n    val totalProtected = apps.count { it.isSystemApp || it.isProtectedRole }\n\n    Scaffold(\n        containerColor = DarkBackground,\n        topBar = {\n            TopAppBar(\n                title = {\n                    Column {\n                        Text(\n                            text = \"Protected Apps / Whitelist\",\n                            style = MaterialTheme.typography.titleMedium.copy(\n                                fontWeight = FontWeight.Bold,\n                                color = TextPrimary\n                            )\n                        )\n                        Text(\n                            text = \"$totalEligible eligible for force stop • $totalWhitelisted whitelisted\",\n                            style = MaterialTheme.typography.labelSmall.copy(color = TextSecondary)\n                        )\n                    }\n                },\n                navigationIcon = {\n                    IconButton(onClick = onBack) {\n                        Icon(imageVector = Icons.Default.ArrowBack, contentDescription = \"Back\", tint = TextPrimary)\n                    }\n                },\n                colors = TopAppBarDefaults.topAppBarColors(containerColor = DarkBackground)\n            )\n        }\n    ) { padding ->\n        Column(\n            modifier = Modifier\n                .fillMaxSize()\n                .padding(padding)\n                .padding(horizontal = 16.dp)\n        ) {\n            // Search Input\n            OutlinedTextField(\n                value = searchQuery,\n                onValueChange = { searchQuery = it },\n                modifier = Modifier\n                    .fillMaxWidth()\n                    .padding(vertical = 8.dp),\n                placeholder = { Text(\"Search installed applications...\", color = TextMuted) },\n                leadingIcon = {\n                    Icon(imageVector = Icons.Default.Search, contentDescription = null, tint = TextMuted)\n                },\n                singleLine = true,\n                shape = RoundedCornerShape(14.dp),\n                colors = OutlinedTextFieldDefaults.colors(\n                    focusedBorderColor = BluePrimary,\n                    unfocusedBorderColor = DarkBorder,\n                    focusedTextColor = TextPrimary,\n                    unfocusedTextColor = TextPrimary,\n                    focusedContainerColor = DarkSurface,\n                    unfocusedContainerColor = DarkSurface\n                )\n            )\n\n            // Filter Tabs\n            Row(\n                modifier = Modifier\n                    .fillMaxWidth()\n                    .padding(bottom = 12.dp),\n                horizontalArrangement = Arrangement.spacedBy(8.dp)\n            ) {\n                FilterTabItem(\n                    title = \"Eligible ($totalEligible)\",\n                    isSelected = selectedFilter == \"Eligible\",\n                    onClick = { selectedFilter = \"Eligible\" }\n                )\n                FilterTabItem(\n                    title = \"Whitelisted ($totalWhitelisted)\",\n                    isSelected = selectedFilter == \"Whitelisted\",\n                    onClick = { selectedFilter = \"Whitelisted\" }\n                )\n                FilterTabItem(\n                    title = \"Protected ($totalProtected)\",\n                    isSelected = selectedFilter == \"System / Protected\",\n                    onClick = { selectedFilter = \"System / Protected\" }\n                )\n            }\n\n            // Notice Banner\n            Card(\n                modifier = Modifier\n                    .fillMaxWidth()\n                    .padding(bottom = 12.dp),\n                shape = RoundedCornerShape(12.dp),\n                colors = CardDefaults.cardColors(containerColor = DarkSurfaceElevated)\n            ) {\n                Row(\n                    modifier = Modifier.padding(12.dp),\n                    verticalAlignment = Alignment.CenterVertically\n                ) {\n                    Icon(\n                        imageVector = Icons.Default.Shield,\n                        contentDescription = null,\n                        tint = BlueAccent,\n                        modifier = Modifier.size(20.dp)\n                    )\n                    Spacer(modifier = Modifier.width(10.dp))\n                    Text(\n                        text = \"System components, launchers, keyboards, and whitelisted apps are strictly excluded from Force Stop batches.\",\n                        style = MaterialTheme.typography.bodySmall.copy(color = TextSecondary, fontSize = 11.sp)\n                    )\n                }\n            }\n\n            // App List\n            LazyColumn(\n                modifier = Modifier.fillMaxSize(),\n                verticalArrangement = Arrangement.spacedBy(8.dp),\n                contentPadding = PaddingValues(bottom = 24.dp)\n            ) {\n                items(filteredApps, key = { it.packageName }) { app ->\n                    val isWhitelisted = whitelist.contains(app.packageName)\n                    AppItemRow(\n                        app = app,\n                        isWhitelisted = isWhitelisted,\n                        onToggle = { onToggleWhitelist(app.packageName) }\n                    )\n                }\n            }\n        }\n    }\n}\n\n@Composable\nfun FilterTabItem(\n    title: String,\n    isSelected: Boolean,\n    onClick: () -> Unit\n) {\n    Surface(\n        onClick = onClick,\n        shape = RoundedCornerShape(10.dp),\n        color = if (isSelected) BluePrimary else DarkSurface,\n        border = if (isSelected) null else androidx.compose.foundation.BorderStroke(1.dp, DarkBorder),\n        modifier = Modifier.height(34.dp)\n    ) {\n        Box(\n            modifier = Modifier.padding(horizontal = 12.dp),\n            contentAlignment = Alignment.Center\n        ) {\n            Text(\n                text = title,\n                style = MaterialTheme.typography.labelSmall.copy(\n                    fontWeight = FontWeight.SemiBold,\n                    color = if (isSelected) Color.White else TextSecondary\n                )\n            )\n        }\n    }\n}\n\n@Composable\nfun AppItemRow(\n    app: AppItem,\n    isWhitelisted: Boolean,\n    onToggle: () -> Unit\n) {\n    Card(\n        modifier = Modifier.fillMaxWidth(),\n        shape = RoundedCornerShape(14.dp),\n        colors = CardDefaults.cardColors(containerColor = DarkSurface),\n        border = androidx.compose.foundation.BorderStroke(1.dp, DarkBorder)\n    ) {\n        Row(\n            modifier = Modifier\n                .fillMaxWidth()\n                .padding(14.dp),\n            verticalAlignment = Alignment.CenterVertically\n        ) {\n            // App Icon Placeholder / Badge\n            Box(\n                modifier = Modifier\n                    .size(40.dp)\n                    .clip(RoundedCornerShape(10.dp))\n                    .background(\n                        when {\n                            app.isProtectedRole -> PurpleSurface\n                            app.isSystemApp -> Color(0xFF1E293B)\n                            isWhitelisted -> EmeraldSurface\n                            else -> DarkSurfaceElevated\n                        }\n                    ),\n                contentAlignment = Alignment.Center\n            ) {\n                Icon(\n                    imageVector = when {\n                        app.isProtectedRole -> Icons.Default.Security\n                        app.isSystemApp -> Icons.Default.Settings\n                        isWhitelisted -> Icons.Default.VerifiedUser\n                        else -> Icons.Default.Apps\n                    },\n                    contentDescription = null,\n                    tint = when {\n                        app.isProtectedRole -> PurpleText\n                        app.isSystemApp -> TextMuted\n                        isWhitelisted -> SuccessEmerald\n                        else -> BlueAccent\n                    },\n                    modifier = Modifier.size(20.dp)\n                )\n            }\n\n            Spacer(modifier = Modifier.width(12.dp))\n\n            Column(modifier = Modifier.weight(1f)) {\n                Text(\n                    text = app.appName,\n                    style = MaterialTheme.typography.bodyMedium.copy(\n                        fontWeight = FontWeight.Bold,\n                        color = TextPrimary\n                    )\n                )\n                Text(\n                    text = app.packageName,\n                    style = MaterialTheme.typography.labelSmall.copy(\n                        color = TextMuted,\n                        fontSize = 10.sp\n                    ),\n                    maxLines = 1\n                )\n\n                if (app.protectionReason != null) {\n                    Text(\n                        text = \"Protected: ${app.protectionReason}\",\n                        style = MaterialTheme.typography.labelSmall.copy(\n                            color = PurpleText,\n                            fontWeight = FontWeight.Medium,\n                            fontSize = 10.sp\n                        )\n                    )\n                }\n            }\n\n            Spacer(modifier = Modifier.width(8.dp))\n\n            if (!app.isSystemApp && !app.isProtectedRole) {\n                FilledTonalButton(\n                    onClick = onToggle,\n                    shape = RoundedCornerShape(10.dp),\n                    colors = ButtonDefaults.filledTonalButtonColors(\n                        containerColor = if (isWhitelisted) EmeraldSurface else DarkSurfaceElevated,\n                        contentColor = if (isWhitelisted) SuccessEmerald else TextSecondary\n                    ),\n                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)\n                ) {\n                    Text(\n                        text = if (isWhitelisted) \"Whitelisted\" else \"Protect\",\n                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold)\n                    )\n                }\n            } else {\n                Surface(\n                    shape = RoundedCornerShape(6.dp),\n                    color = DarkSurfaceElevated\n                ) {\n                    Text(\n                        text = if (app.isProtectedRole) \"SYSTEM ROLE\" else \"SYSTEM APP\",\n                        style = MaterialTheme.typography.labelSmall.copy(\n                            color = TextMuted,\n                            fontSize = 9.sp,\n                            fontWeight = FontWeight.Bold\n                        ),\n                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)\n                    )\n                }\n            }\n        }\n    }\n}\n"
+  },
+  {
+    "path": "app/src/main/java/com/statusbarmanager/app/ui/theme/Color.kt",
+    "name": "Color.kt",
+    "language": "kotlin",
+    "category": "Kotlin Source",
+    "content": "package com.statusbarmanager.app.ui.theme\n\nimport androidx.compose.ui.graphics.Color\n\n// Minimal dark theme with vibrant blue accent\nval BluePrimary = Color(0xFF2563EB)\nval BluePrimaryVariant = Color(0xFF1D4ED8)\nval BlueAccent = Color(0xFF3B82F6)\nval BlueContainer = Color(0xFF1E3A8A)\n\nval DarkBackground = Color(0xFF0A0E17)\nval DarkSurface = Color(0xFF111827)\nval DarkSurfaceElevated = Color(0xFF1F2937)\nval DarkBorder = Color(0xFF374151)\n\nval TextPrimary = Color(0xFFF9FAFB)\nval TextSecondary = Color(0xFF9CA3AF)\nval TextMuted = Color(0xFF6B7280)\n\nval SuccessGreen = Color(0xFF10B981)\nval WarningAmber = Color(0xFFF59E0B)\nval ErrorRed = Color(0xFFEF4444)\n"
+  },
+  {
+    "path": "app/src/main/java/com/statusbarmanager/app/ui/theme/Theme.kt",
+    "name": "Theme.kt",
+    "language": "kotlin",
+    "category": "Kotlin Source",
+    "content": "package com.statusbarmanager.app.ui.theme\n\nimport android.app.Activity\nimport androidx.compose.material3.MaterialTheme\nimport androidx.compose.material3.darkColorScheme\nimport androidx.compose.runtime.Composable\nimport androidx.compose.runtime.SideEffect\nimport androidx.compose.ui.graphics.toArgb\nimport androidx.compose.ui.platform.LocalView\nimport androidx.core.view.WindowCompat\n\nprivate val DarkColorScheme = darkColorScheme(\n    primary = BlueAccent,\n    onPrimary = TextPrimary,\n    primaryContainer = BlueContainer,\n    onPrimaryContainer = TextPrimary,\n    secondary = BlueAccent,\n    background = DarkBackground,\n    surface = DarkSurface,\n    onBackground = TextPrimary,\n    onSurface = TextPrimary,\n    surfaceVariant = DarkSurfaceElevated,\n    outline = DarkBorder\n)\n\n@Composable\nfun StatusBarManagerTheme(content: @Composable () -> Unit) {\n    val view = LocalView.current\n    if (!view.isInEditMode) {\n        SideEffect {\n            val window = (view.context as? Activity)?.window\n            if (window != null) {\n                window.statusBarColor = DarkBackground.toArgb()\n                window.navigationBarColor = DarkBackground.toArgb()\n                WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = false\n            }\n        }\n    }\n\n    MaterialTheme(\n        colorScheme = DarkColorScheme,\n        content = content\n    )\n}\n"
+  },
+  {
+    "path": "app/src/main/java/com/statusbarmanager/app/ui/theme/Type.kt",
+    "name": "Type.kt",
+    "language": "kotlin",
+    "category": "Kotlin Source",
+    "content": "package com.statusbarmanager.app.ui.theme\n\nimport androidx.compose.material3.Typography\nimport androidx.compose.ui.text.TextStyle\nimport androidx.compose.ui.text.font.FontFamily\nimport androidx.compose.ui.text.font.FontWeight\nimport androidx.compose.ui.unit.sp\n\nval Typography = Typography(\n    headlineLarge = TextStyle(\n        fontFamily = FontFamily.Default,\n        fontWeight = FontWeight.Bold,\n        fontSize = 28.sp,\n        lineHeight = 36.sp,\n        color = TextPrimary\n    ),\n    titleLarge = TextStyle(\n        fontFamily = FontFamily.Default,\n        fontWeight = FontWeight.SemiBold,\n        fontSize = 20.sp,\n        lineHeight = 28.sp,\n        color = TextPrimary\n    ),\n    bodyLarge = TextStyle(\n        fontFamily = FontFamily.Default,\n        fontWeight = FontWeight.Normal,\n        fontSize = 16.sp,\n        lineHeight = 24.sp,\n        color = TextSecondary\n    ),\n    bodyMedium = TextStyle(\n        fontFamily = FontFamily.Default,\n        fontWeight = FontWeight.Normal,\n        fontSize = 14.sp,\n        lineHeight = 20.sp,\n        color = TextSecondary\n    ),\n    labelSmall = TextStyle(\n        fontFamily = FontFamily.Default,\n        fontWeight = FontWeight.Medium,\n        fontSize = 11.sp,\n        lineHeight = 16.sp,\n        color = TextMuted\n    )\n)\n"
+  },
+  {
+    "path": "app/src/main/java/com/statusbarmanager/app/widget/StatusBarWidgetProvider.kt",
+    "name": "StatusBarWidgetProvider.kt",
+    "language": "kotlin",
+    "category": "Kotlin Source",
+    "content": "package com.statusbarmanager.app.widget\n\nimport android.app.PendingIntent\nimport android.appwidget.AppWidgetManager\nimport android.appwidget.AppWidgetProvider\nimport android.content.ComponentName\nimport android.content.Context\nimport android.content.Intent\nimport android.graphics.Color\nimport android.view.View\nimport android.widget.RemoteViews\nimport com.statusbarmanager.app.MainActivity\nimport com.statusbarmanager.app.R\nimport com.statusbarmanager.app.automation.EngageMode\nimport com.statusbarmanager.app.automation.OperationCoordinator\nimport com.statusbarmanager.app.automation.SettingsAutomationManager\nimport com.statusbarmanager.app.data.DataStoreRepository\nimport com.statusbarmanager.app.data.SettingsBackupManager\nimport com.statusbarmanager.app.data.dataStore\nimport kotlinx.coroutines.CoroutineScope\nimport kotlinx.coroutines.Dispatchers\nimport kotlinx.coroutines.flow.first\nimport kotlinx.coroutines.launch\n\n/**\n * OBJECTIVE 4: Native Android Home-Screen Widget Provider.\n * Allows users to Engage and Disengage StatusBar Manager directly from their home screen.\n * - Displays current state: NORMAL / ENGAGED / RUNNING / PARTIAL\n * - Shows selected Engage Button Behaviour\n * - Action button triggers central OperationCoordinator\n * - If Accessibility permission is missing, opens permission onboarding in MainActivity\n */\nclass StatusBarWidgetProvider : AppWidgetProvider() {\n\n    companion object {\n        const val ACTION_WIDGET_TOGGLE = \"com.statusbarmanager.app.widget.ACTION_WIDGET_TOGGLE\"\n\n        fun updateAllWidgets(context: Context) {\n            val appWidgetManager = AppWidgetManager.getInstance(context)\n            val componentName = ComponentName(context, StatusBarWidgetProvider::class.java)\n            val appWidgetIds = appWidgetManager.getAppWidgetIds(componentName)\n            if (appWidgetIds.isNotEmpty()) {\n                val intent = Intent(context, StatusBarWidgetProvider::class.java).apply {\n                    action = AppWidgetManager.ACTION_APPWIDGET_UPDATE\n                    putExtra(AppWidgetManager.EXTRA_APPWIDGET_IDS, appWidgetIds)\n                }\n                context.sendBroadcast(intent)\n            }\n        }\n    }\n\n    override fun onUpdate(context: Context, appWidgetManager: AppWidgetManager, appWidgetIds: IntArray) {\n        val repo = DataStoreRepository(context)\n        val automationManager = SettingsAutomationManager(context)\n\n        CoroutineScope(Dispatchers.IO).launch {\n            val isHideActive = repo.isHideActiveFlow.first()\n            val backupModel = repo.backupModelFlow.first()\n            val engageMode = repo.engageModeFlow.first()\n            val isAccGranted = automationManager.isAccessibilityPermissionGranted()\n\n            for (widgetId in appWidgetIds) {\n                updateAppWidget(context, appWidgetManager, widgetId, isHideActive, backupModel?.isPartial ?: false, engageMode, isAccGranted)\n            }\n        }\n    }\n\n    override fun onReceive(context: Context, intent: Intent) {\n        super.onReceive(context, intent)\n        if (intent.action == ACTION_WIDGET_TOGGLE) {\n            val repo = DataStoreRepository(context)\n            val backupManager = SettingsBackupManager(repo)\n            val automationManager = SettingsAutomationManager(context)\n            val coordinator = OperationCoordinator(context, repo, backupManager)\n\n            if (!automationManager.isAccessibilityPermissionGranted()) {\n                // Open app to prompt for accessibility\n                val openIntent = Intent(context, MainActivity::class.java).apply {\n                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP\n                    putExtra(\"prompt_accessibility\", true)\n                }\n                context.startActivity(openIntent)\n                return\n            }\n\n            CoroutineScope(Dispatchers.IO).launch {\n                val isHideActive = repo.isHideActiveFlow.first()\n                if (isHideActive) {\n                    coordinator.disengage()\n                } else {\n                    coordinator.engage()\n                }\n                updateAllWidgets(context)\n            }\n        }\n    }\n\n    private fun updateAppWidget(\n        context: Context,\n        appWidgetManager: AppWidgetManager,\n        appWidgetId: Int,\n        isHideActive: Boolean,\n        isPartial: Boolean,\n        engageMode: EngageMode,\n        isAccessibilityGranted: Boolean\n    ) {\n        val views = RemoteViews(context.packageName, R.layout.widget_status_bar_manager)\n\n        // Status badge\n        val (statusText, statusColor) = when {\n            !isAccessibilityGranted -> \"NEEDS PERMISSION\" to Color.parseColor(\"#EF4444\")\n            isPartial -> \"PARTIAL\" to Color.parseColor(\"#F59E0B\")\n            isHideActive -> \"ENGAGED\" to Color.parseColor(\"#3B82F6\")\n            else -> \"NORMAL\" to Color.parseColor(\"#10B981\")\n        }\n        views.setTextViewText(R.id.widget_status_badge, statusText)\n        views.setTextColor(R.id.widget_status_badge, statusColor)\n\n        // Mode info\n        val modeStr = when (engageMode) {\n            EngageMode.STATUS_BAR_ONLY -> \"Mode: Status Bar Only\"\n            EngageMode.FORCE_STOP_APPS_ONLY -> \"Mode: Force Stop Apps Only\"\n            EngageMode.BOTH -> \"Mode: Both (Status Bar + Apps)\"\n        }\n        views.setTextViewText(R.id.widget_mode_text, modeStr)\n\n        // Action button text\n        val buttonText = if (isHideActive) \"Disengage\" else \"Engage\"\n        views.setTextViewText(R.id.widget_action_button, buttonText)\n\n        // Toggle PendingIntent\n        val toggleIntent = Intent(context, StatusBarWidgetProvider::class.java).apply {\n            action = ACTION_WIDGET_TOGGLE\n        }\n        val pendingIntent = PendingIntent.getBroadcast(\n            context,\n            appWidgetId,\n            toggleIntent,\n            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE\n        )\n        views.setOnClickPendingIntent(R.id.widget_action_button, pendingIntent)\n\n        // Root click opens main app\n        val openAppIntent = Intent(context, MainActivity::class.java).apply {\n            flags = Intent.FLAG_ACTIVITY_NEW_TASK\n        }\n        val openAppPendingIntent = PendingIntent.getActivity(\n            context,\n            0,\n            openAppIntent,\n            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE\n        )\n        views.setOnClickPendingIntent(R.id.widget_root, openAppPendingIntent)\n\n        appWidgetManager.updateAppWidget(appWidgetId, views)\n    }\n}\n"
+  },
+  {
+    "path": "app/src/main/AndroidManifest.xml",
+    "name": "AndroidManifest.xml",
+    "language": "xml",
+    "category": "Manifest & Resources",
+    "content": "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<manifest xmlns:android=\"http://schemas.android.com/apk/res/android\">\n\n    <!-- Overlay permission for Live Floating Progress Panel while Settings is automated -->\n    <uses-permission android:name=\"android.permission.SYSTEM_ALERT_WINDOW\" />\n    <uses-permission android:name=\"android.permission.POST_NOTIFICATIONS\" />\n    \n    <!-- Package visibility permission for App Force Stop feature (Objective 1) -->\n    <!-- Used exclusively locally to discover installed non-system apps to allow user whitelisting and automated force stop. -->\n    <uses-permission android:name=\"android.permission.QUERY_ALL_PACKAGES\" />\n\n    <application\n        android:allowBackup=\"true\"\n        android:dataExtractionRules=\"@xml/data_extraction_rules\"\n        android:fullBackupContent=\"@xml/backup_rules\"\n        android:icon=\"@mipmap/ic_launcher\"\n        android:label=\"@string/app_name\"\n        android:roundIcon=\"@mipmap/ic_launcher_round\"\n        android:supportsRtl=\"true\"\n        android:theme=\"@style/Theme.StatusBarManager\">\n\n        <activity\n            android:name=\".MainActivity\"\n            android:exported=\"true\"\n            android:label=\"@string/app_name\"\n            android:theme=\"@style/Theme.StatusBarManager\">\n            <intent-filter>\n                <action android:name=\"android.intent.action.MAIN\" />\n                <category android:name=\"android.intent.category.LAUNCHER\" />\n            </intent-filter>\n        </activity>\n\n        <!-- Home Screen Widget Provider (Objective 4) -->\n        <receiver\n            android:name=\".widget.StatusBarWidgetProvider\"\n            android:exported=\"true\"\n            android:label=\"@string/widget_name\">\n            <intent-filter>\n                <action android:name=\"android.appwidget.action.APPWIDGET_UPDATE\" />\n                <action android:name=\"com.statusbarmanager.app.widget.ACTION_WIDGET_TOGGLE\" />\n            </intent-filter>\n            <meta-data\n                android:name=\"android.appwidget.provider\"\n                android:resource=\"@xml/status_bar_widget_info\" />\n        </receiver>\n\n        <!-- Dedicated Android Accessibility Service for Automating Status Bar Settings & Force Stop -->\n        <service\n            android:name=\".service.StatusBarAccessibilityService\"\n            android:permission=\"android.permission.BIND_ACCESSIBILITY_SERVICE\"\n            android:exported=\"true\"\n            android:label=\"@string/accessibility_service_label\"\n            android:description=\"@string/accessibility_service_description\">\n            <intent-filter>\n                <action android:name=\"android.accessibilityservice.AccessibilityService\" />\n            </intent-filter>\n\n            <meta-data\n                android:name=\"android.accessibilityservice\"\n                android:resource=\"@xml/status_bar_accessibility_service_config\" />\n        </service>\n\n    </application>\n\n</manifest>\n"
+  },
+  {
+    "path": "app/src/main/res/xml/status_bar_accessibility_service_config.xml",
+    "name": "status_bar_accessibility_service_config.xml",
+    "language": "xml",
+    "category": "Manifest & Resources",
+    "content": "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<accessibility-service xmlns:android=\"http://schemas.android.com/apk/res/android\"\n    android:description=\"@string/accessibility_service_description\"\n    android:accessibilityEventTypes=\"typeWindowStateChanged|typeWindowContentChanged|typeViewClicked|typeViewScrolled\"\n    android:accessibilityFeedbackType=\"feedbackGeneric\"\n    android:notificationTimeout=\"100\"\n    android:canRetrieveWindowContent=\"true\"\n    android:canPerformGestures=\"true\"\n    android:accessibilityFlags=\"flagDefault|flagRetrieveInteractiveWindows|flagReportViewIds\"\n    android:settingsActivity=\"com.statusbarmanager.app.MainActivity\" />\n"
+  },
+  {
+    "path": "app/src/main/res/xml/status_bar_widget_info.xml",
+    "name": "status_bar_widget_info.xml",
+    "language": "xml",
+    "category": "Manifest & Resources",
+    "content": "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<appwidget-provider xmlns:android=\"http://schemas.android.com/apk/res/android\"\n    android:minWidth=\"180dp\"\n    android:minHeight=\"110dp\"\n    android:targetCellWidth=\"3\"\n    android:targetCellHeight=\"2\"\n    android:updatePeriodMillis=\"0\"\n    android:initialLayout=\"@layout/widget_status_bar_manager\"\n    android:resizeMode=\"horizontal|vertical\"\n    android:widgetCategory=\"home_screen\"\n    android:description=\"@string/widget_name\" />\n"
+  },
+  {
+    "path": "app/src/main/res/layout/widget_status_bar_manager.xml",
+    "name": "widget_status_bar_manager.xml",
+    "language": "xml",
+    "category": "Manifest & Resources",
+    "content": "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<LinearLayout xmlns:android=\"http://schemas.android.com/apk/res/android\"\n    android:id=\"@+id/widget_root\"\n    android:layout_width=\"match_parent\"\n    android:layout_height=\"match_parent\"\n    android:background=\"@drawable/widget_background\"\n    android:orientation=\"vertical\"\n    android:padding=\"14dp\">\n\n    <!-- Header Row -->\n    <LinearLayout\n        android:layout_width=\"match_parent\"\n        android:layout_height=\"wrap_content\"\n        android:gravity=\"center_vertical\"\n        android:orientation=\"horizontal\">\n\n        <ImageView\n            android:layout_width=\"22dp\"\n            android:layout_height=\"22dp\"\n            android:src=\"@mipmap/ic_launcher\"\n            android:contentDescription=\"@string/app_name\" />\n\n        <TextView\n            android:layout_width=\"0dp\"\n            android:layout_height=\"wrap_content\"\n            android:layout_weight=\"1\"\n            android:layout_marginStart=\"8dp\"\n            android:text=\"@string/app_name\"\n            android:textColor=\"#F8FAFC\"\n            android:textSize=\"13sp\"\n            android:textStyle=\"bold\" />\n\n        <TextView\n            android:id=\"@+id/widget_status_badge\"\n            android:layout_width=\"wrap_content\"\n            android:layout_height=\"wrap_content\"\n            android:text=\"NORMAL\"\n            android:textColor=\"#10B981\"\n            android:textSize=\"10sp\"\n            android:textStyle=\"bold\" />\n    </LinearLayout>\n\n    <!-- Subtitle / Mode Info -->\n    <TextView\n        android:id=\"@+id/widget_mode_text\"\n        android:layout_width=\"match_parent\"\n        android:layout_height=\"wrap_content\"\n        android:layout_marginTop=\"4dp\"\n        android:text=\"Mode: Both (Status Bar + Apps)\"\n        android:textColor=\"#94A3B8\"\n        android:textSize=\"11sp\" />\n\n    <!-- Progress Indicator (Visible when running) -->\n    <ProgressBar\n        android:id=\"@+id/widget_progress_bar\"\n        style=\"?android:attr/progressBarStyleHorizontal\"\n        android:layout_width=\"match_parent\"\n        android:layout_height=\"4dp\"\n        android:layout_marginTop=\"6dp\"\n        android:max=\"100\"\n        android:progress=\"0\"\n        android:visibility=\"gone\" />\n\n    <!-- Space -->\n    <View\n        android:layout_width=\"match_parent\"\n        android:layout_height=\"0dp\"\n        android:layout_weight=\"1\" />\n\n    <!-- Engage / Disengage Action Button -->\n    <Button\n        android:id=\"@+id/widget_action_button\"\n        android:layout_width=\"match_parent\"\n        android:layout_height=\"38dp\"\n        android:background=\"@drawable/widget_button_background\"\n        android:text=\"Engage\"\n        android:textAllCaps=\"false\"\n        android:textColor=\"#FFFFFF\"\n        android:textSize=\"12sp\"\n        android:textStyle=\"bold\" />\n\n</LinearLayout>\n"
+  },
+  {
+    "path": "app/src/main/res/values/strings.xml",
+    "name": "strings.xml",
+    "language": "xml",
+    "category": "Manifest & Resources",
+    "content": "<resources>\n    <string name=\"app_name\">StatusBar Manager</string>\n    <string name=\"widget_name\">StatusBar Manager Widget</string>\n    <string name=\"accessibility_service_label\">StatusBar Manager Assistant</string>\n    <string name=\"accessibility_service_description\">Automates navigation to Android System Settings to adjust or restore status bar clock, network speed, status icon visibility, and force-stop eligible non-system apps at user request. This service remains completely idle outside of requested operations and never collects, records, or transmits any personal data.</string>\n</resources>\n"
+  },
+  {
+    "path": "app/src/main/res/values/colors.xml",
+    "name": "colors.xml",
+    "language": "xml",
+    "category": "Manifest & Resources",
+    "content": "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<resources>\n    <color name=\"primary\">#2563EB</color>\n    <color name=\"primary_variant\">#1D4ED8</color>\n    <color name=\"secondary\">#06B6D4</color>\n    <color name=\"background_dark\">#0B0F17</color>\n    <color name=\"surface_dark\">#111827</color>\n    <color name=\"text_primary\">#F9FAFB</color>\n    <color name=\"text_secondary\">#9CA3AF</color>\n    <color name=\"ic_launcher_background\">#0B0F17</color>\n</resources>\n"
+  },
+  {
+    "path": "app/src/main/res/values/themes.xml",
+    "name": "themes.xml",
+    "language": "xml",
+    "category": "Manifest & Resources",
+    "content": "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<resources>\n    <style name=\"Theme.StatusBarManager\" parent=\"android:Theme.Material.NoActionBar\">\n        <item name=\"android:statusBarColor\">@color/background_dark</item>\n        <item name=\"android:navigationBarColor\">@color/background_dark</item>\n        <item name=\"android:windowBackground\">@color/background_dark</item>\n    </style>\n</resources>\n"
+  },
+  {
+    "path": "app/src/main/res/drawable/widget_background.xml",
+    "name": "widget_background.xml",
+    "language": "xml",
+    "category": "Manifest & Resources",
+    "content": "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<shape xmlns:android=\"http://schemas.android.com/apk/res/android\"\n    android:shape=\"rectangle\">\n    <solid android:color=\"#0F172A\" />\n    <corners android:radius=\"18dp\" />\n    <stroke\n        android:width=\"1.5dp\"\n        android:color=\"#1E293B\" />\n</shape>\n"
+  },
+  {
+    "path": "app/src/main/res/drawable/widget_button_background.xml",
+    "name": "widget_button_background.xml",
+    "language": "xml",
+    "category": "Manifest & Resources",
+    "content": "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<shape xmlns:android=\"http://schemas.android.com/apk/res/android\"\n    android:shape=\"rectangle\">\n    <solid android:color=\"#2563EB\" />\n    <corners android:radius=\"12dp\" />\n</shape>\n"
+  },
+  {
+    "path": "app/build.gradle.kts",
+    "name": "build.gradle.kts",
+    "language": "gradle",
+    "category": "Gradle Build",
+    "content": "plugins {\n    alias(libs.plugins.android.application)\n    alias(libs.plugins.kotlin.android)\n    alias(libs.plugins.kotlin.compose)\n}\n\nandroid {\n    namespace = \"com.statusbarmanager.app\"\n    compileSdk = 35\n\n    defaultConfig {\n        applicationId = \"com.statusbarmanager.app\"\n        minSdk = 26\n        targetSdk = 35\n        versionCode = 1\n        versionName = \"1.0.0\"\n\n        testInstrumentationRunner = \"androidx.test.runner.AndroidJUnitRunner\"\n        vectorDrawables {\n            useSupportLibrary = true\n        }\n    }\n\n    buildTypes {\n        release {\n            isMinifyEnabled = true\n            isShrinkResources = true\n            proguardFiles(\n                getDefaultProguardFile(\"proguard-android-optimize.txt\"),\n                \"proguard-rules.pro\"\n            )\n            signingConfig = signingConfigs.getByName(\"debug\")\n        }\n        debug {\n            applicationIdSuffix = \".debug\"\n            isDebuggable = true\n        }\n    }\n    compileOptions {\n        sourceCompatibility = JavaVersion.VERSION_17\n        targetCompatibility = JavaVersion.VERSION_17\n    }\n    kotlinOptions {\n        jvmTarget = \"17\"\n    }\n    buildFeatures {\n        compose = true\n    }\n}\n\ndependencies {\n    implementation(libs.androidx.core.ktx)\n    implementation(libs.androidx.lifecycle.runtime.ktx)\n    implementation(libs.androidx.lifecycle.viewmodel.compose)\n    implementation(libs.androidx.activity.compose)\n    implementation(platform(libs.androidx.compose.bom))\n    implementation(libs.androidx.ui)\n    implementation(libs.androidx.ui.graphics)\n    implementation(libs.androidx.ui.tooling.preview)\n    implementation(libs.androidx.material3)\n    implementation(libs.androidx.material.icons.extended)\n    implementation(libs.androidx.datastore.preferences)\n    implementation(libs.kotlinx.coroutines.android)\n\n    debugImplementation(libs.androidx.ui.tooling)\n}\n"
+  },
+  {
+    "path": "build.gradle.kts",
+    "name": "build.gradle.kts",
+    "language": "gradle",
+    "category": "Gradle Build",
+    "content": "// Top-level build file where you can add configuration options common to all sub-projects/modules.\nplugins {\n    alias(libs.plugins.android.application) apply false\n    alias(libs.plugins.kotlin.android) apply false\n    alias(libs.plugins.kotlin.compose) apply false\n}\n"
+  },
+  {
+    "path": "settings.gradle.kts",
+    "name": "settings.gradle.kts",
+    "language": "gradle",
+    "category": "Gradle Build",
+    "content": "pluginManagement {\n    repositories {\n        google()\n        mavenCentral()\n        gradlePluginPortal()\n    }\n}\ndependencyResolutionManagement {\n    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)\n    repositories {\n        google()\n        mavenCentral()\n    }\n}\n\nrootProject.name = \"StatusBarManager\"\ninclude(\":app\")\n"
   }
 ];

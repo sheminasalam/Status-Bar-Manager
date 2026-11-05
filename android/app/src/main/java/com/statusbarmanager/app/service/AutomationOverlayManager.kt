@@ -23,8 +23,12 @@ import com.statusbarmanager.app.automation.AutomationProgress
 import com.statusbarmanager.app.automation.AutomationStep
 
 /**
- * Manages the floating progress overlay (TYPE_APPLICATION_OVERLAY) shown over Settings,
- * with automatic fallback to ongoing status notifications when overlay permission is unavailable.
+ * Manages the floating progress overlay (TYPE_APPLICATION_OVERLAY) shown during automation.
+ * OBJECTIVE 3:
+ * - Remains visible through Settings navigation, App Info screens, and Force Stop dialogs.
+ * - DOES NOT automatically dismiss after 2.2 seconds.
+ * - Remains visible upon completion until explicitly dismissed by user via Close button.
+ * - Updates in-place without tearing down WindowManager attachment.
  */
 class AutomationOverlayManager(private val context: Context) {
 
@@ -47,7 +51,9 @@ class AutomationOverlayManager(private val context: Context) {
     private var percentageView: TextView? = null
     private var progressBar: ProgressBar? = null
     private var statsView: TextView? = null
+    private var appStatsView: TextView? = null
     private var contentContainer: LinearLayout? = null
+    private var closeButton: Button? = null
 
     init {
         createNotificationChannel()
@@ -60,7 +66,7 @@ class AutomationOverlayManager(private val context: Context) {
                 "Status Bar Automation Progress",
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
-                description = "Shows live progress during status bar automation operations"
+                description = "Shows live progress during status bar & app automation operations"
                 setShowBadge(false)
             }
             notificationManager.createNotificationChannel(channel)
@@ -84,18 +90,16 @@ class AutomationOverlayManager(private val context: Context) {
                 removeOverlayView()
             }
 
-            // Always update fallback notification as secondary or primary status feed
+            // Always update fallback notification
             updateNotification(progress)
 
-            // Auto-dismiss after completion or failure
-            if (progress.currentStep == AutomationStep.COMPLETED ||
-                progress.currentStep == AutomationStep.PARTIAL ||
-                progress.currentStep == AutomationStep.FAILED
-            ) {
-                mainHandler.postDelayed({
-                    dismiss()
-                }, 2200)
-            }
+            // NOTE: Automatic 2200ms dismissal has been completely removed!
+            // The overlay now stays visible until the user explicitly taps Close.
+            val isFinished = progress.currentStep == AutomationStep.COMPLETED ||
+                    progress.currentStep == AutomationStep.PARTIAL ||
+                    progress.currentStep == AutomationStep.FAILED
+
+            closeButton?.visibility = if (isFinished) View.VISIBLE else View.GONE
         }
     }
 
@@ -111,11 +115,11 @@ class AutomationOverlayManager(private val context: Context) {
             val bg = GradientDrawable().apply {
                 setColor(Color.parseColor("#0F172A")) // Dark surface slate-900
                 cornerRadius = dp(16).toFloat()
-                setStroke(dp(1), Color.parseColor("#3B82F6")) // Vibrant blue accent
+                setStroke(dp(1.5f.toInt()), Color.parseColor("#3B82F6")) // Vibrant blue accent
             }
             background = bg
             setPadding(dp(16), dp(12), dp(16), dp(14))
-            elevation = dp(8).toFloat()
+            elevation = dp(10).toFloat()
         }
 
         // Header Row (Title + Percentage + Minimize/Close)
@@ -125,9 +129,9 @@ class AutomationOverlayManager(private val context: Context) {
         }
 
         val title = TextView(context).apply {
-            text = "Status Bar Automation"
+            text = "StatusBar Manager – Engage"
             setTextColor(Color.parseColor("#F8FAFC"))
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f)
             setTypeface(typeface, android.graphics.Typeface.BOLD)
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
         }
@@ -139,7 +143,7 @@ class AutomationOverlayManager(private val context: Context) {
             setTextColor(Color.parseColor("#38BDF8"))
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
             setTypeface(typeface, android.graphics.Typeface.BOLD)
-            setPadding(dp(8), 0, dp(12), 0)
+            setPadding(dp(8), 0, dp(10), 0)
         }
         percentageView = percent
         headerRow.addView(percent)
@@ -161,6 +165,28 @@ class AutomationOverlayManager(private val context: Context) {
         }
         headerRow.addView(minBtn)
 
+        val closeBtn = Button(context).apply {
+            text = "✕"
+            setTextColor(Color.parseColor("#EF4444"))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+            val btnBg = GradientDrawable().apply {
+                setColor(Color.parseColor("#1E293B"))
+                cornerRadius = dp(6).toFloat()
+            }
+            background = btnBg
+            val lp = LinearLayout.LayoutParams(dp(28), dp(26)).apply {
+                setMargins(dp(6), 0, 0, 0)
+            }
+            layoutParams = lp
+            setPadding(0, 0, 0, 0)
+            visibility = View.GONE
+            setOnClickListener {
+                dismiss()
+            }
+        }
+        closeButton = closeBtn
+        headerRow.addView(closeBtn)
+
         root.addView(headerRow)
 
         // Expandable Content Body
@@ -175,9 +201,6 @@ class AutomationOverlayManager(private val context: Context) {
             isIndeterminate = false
             max = 100
             progress = 0
-            val pbg = GradientDrawable().apply {
-                cornerRadius = dp(4).toFloat()
-            }
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 dp(6)
@@ -197,7 +220,7 @@ class AutomationOverlayManager(private val context: Context) {
         operationView = opText
         body.addView(opText)
 
-        // Detailed Statistics Text
+        // Detailed Statistics Text (Status Icons)
         val stats = TextView(context).apply {
             text = "Icons: 0 discovered"
             setTextColor(Color.parseColor("#94A3B8"))
@@ -207,10 +230,21 @@ class AutomationOverlayManager(private val context: Context) {
         statsView = stats
         body.addView(stats)
 
+        // Detailed Statistics Text (Applications)
+        val appStats = TextView(context).apply {
+            text = "Apps: 0 eligible"
+            setTextColor(Color.parseColor("#60A5FA"))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+            setPadding(0, dp(2), 0, 0)
+            visibility = View.GONE
+        }
+        appStatsView = appStats
+        body.addView(appStats)
+
         root.addView(body)
         overlayView = root
 
-        // Setup WindowManager LayoutParams
+        // Setup WindowManager LayoutParams (TYPE_APPLICATION_OVERLAY)
         val params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.WRAP_CONTENT,
@@ -222,7 +256,6 @@ class AutomationOverlayManager(private val context: Context) {
         ).apply {
             gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
             y = dp(24) // Top offset below status bar
-            // Margins in pixel
             width = context.resources.displayMetrics.widthPixels - dp(32)
         }
 
@@ -258,6 +291,14 @@ class AutomationOverlayManager(private val context: Context) {
                 "Step ${progress.stepIndex} of ${progress.totalSteps}"
         }
         statsView?.text = statsText
+
+        val appStats = progress.appStats
+        if (appStats.totalEligible > 0) {
+            appStatsView?.visibility = View.VISIBLE
+            appStatsView?.text = "Apps: ${appStats.totalEligible} eligible | ${appStats.successfullyStopped} stopped | ${appStats.alreadyStopped} already off | ${appStats.remaining} left"
+        } else {
+            appStatsView?.visibility = View.GONE
+        }
     }
 
     private fun updateNotification(progress: AutomationProgress) {
@@ -286,7 +327,10 @@ class AutomationOverlayManager(private val context: Context) {
             .setOngoing(!isFinished)
             .setOnlyAlertOnce(true)
 
-        if (progress.iconStats.discovered > 0) {
+        if (progress.appStats.totalEligible > 0) {
+            val aStats = progress.appStats
+            builder.setSubText("Apps: ${aStats.successfullyStopped}/${aStats.totalEligible} force-stopped")
+        } else if (progress.iconStats.discovered > 0) {
             val stats = progress.iconStats
             builder.setSubText("Icons: ${stats.discovered} found, ${stats.disabled + stats.restored} processed")
         }

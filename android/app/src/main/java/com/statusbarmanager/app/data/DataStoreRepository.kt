@@ -4,8 +4,10 @@ import android.content.Context
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.*
 import androidx.datastore.preferences.preferencesDataStore
+import com.statusbarmanager.app.automation.EngageMode
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import java.io.IOException
 
@@ -27,7 +29,29 @@ class DataStoreRepository(private val context: Context) {
         val HAS_HEADPHONE_CONTROL = booleanPreferencesKey("has_headphone_control")
         val ORIGINAL_HEADPHONE_SETTING = booleanPreferencesKey("original_headphone_setting")
         val IS_PARTIAL_RESULT = booleanPreferencesKey("is_partial_result")
+        
+        // Objective 1 & 2: Engage Mode and Whitelist
+        val ENGAGE_MODE = stringPreferencesKey("engage_mode")
+        val WHITELIST_PACKAGES = stringSetPreferencesKey("whitelist_packages")
+        val LAST_FORCE_STOP_STATS = stringPreferencesKey("last_force_stop_stats")
     }
+
+    val engageModeFlow: Flow<EngageMode> = context.dataStore.data
+        .catch { exception ->
+            if (exception is IOException) emit(emptyPreferences()) else throw exception
+        }
+        .map { preferences ->
+            val modeStr = preferences[PreferencesKeys.ENGAGE_MODE] ?: EngageMode.BOTH.name
+            EngageMode.fromString(modeStr)
+        }
+
+    val whitelistFlow: Flow<Set<String>> = context.dataStore.data
+        .catch { exception ->
+            if (exception is IOException) emit(emptyPreferences()) else throw exception
+        }
+        .map { preferences ->
+            preferences[PreferencesKeys.WHITELIST_PACKAGES] ?: emptySet()
+        }
 
     val isHideActiveFlow: Flow<Boolean> = context.dataStore.data
         .catch { exception ->
@@ -90,9 +114,39 @@ class DataStoreRepository(private val context: Context) {
             )
         }
 
+    suspend fun setEngageMode(mode: EngageMode) {
+        context.dataStore.edit { preferences ->
+            preferences[PreferencesKeys.ENGAGE_MODE] = mode.name
+        }
+    }
+
+    suspend fun getEngageMode(): EngageMode {
+        val prefs = context.dataStore.data.first()
+        val modeStr = prefs[PreferencesKeys.ENGAGE_MODE] ?: EngageMode.BOTH.name
+        return EngageMode.fromString(modeStr)
+    }
+
+    suspend fun addToWhitelist(packageName: String) {
+        context.dataStore.edit { preferences ->
+            val current = preferences[PreferencesKeys.WHITELIST_PACKAGES] ?: emptySet()
+            preferences[PreferencesKeys.WHITELIST_PACKAGES] = current + packageName
+        }
+    }
+
+    suspend fun removeFromWhitelist(packageName: String) {
+        context.dataStore.edit { preferences ->
+            val current = preferences[PreferencesKeys.WHITELIST_PACKAGES] ?: emptySet()
+            preferences[PreferencesKeys.WHITELIST_PACKAGES] = current - packageName
+        }
+    }
+
+    suspend fun getWhitelist(): Set<String> {
+        val prefs = context.dataStore.data.first()
+        return prefs[PreferencesKeys.WHITELIST_PACKAGES] ?: emptySet()
+    }
+
     suspend fun saveOriginalBackup(backup: StatusBarBackupModel) {
         context.dataStore.edit { preferences ->
-            // Prevent overwriting if already marked active unless explicitly resetting
             preferences[PreferencesKeys.HAS_VALID_BACKUP] = true
             preferences[PreferencesKeys.BACKUP_TIMESTAMP] = backup.timestamp
             preferences[PreferencesKeys.ORIGINAL_TIME_SETTING] = backup.originalTimeSetting

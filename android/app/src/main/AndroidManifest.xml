@@ -4,6 +4,10 @@
     <!-- Overlay permission for Live Floating Progress Panel while Settings is automated -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    
+    <!-- Package visibility permission for App Force Stop feature (Objective 1) -->
+    <!-- Used exclusively locally to discover installed non-system apps to allow user whitelisting and automated force stop. -->
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
 
     <application
         android:allowBackup="true"
@@ -26,7 +30,21 @@
             </intent-filter>
         </activity>
 
-        <!-- Dedicated Android Accessibility Service for Automating Status Bar Settings -->
+        <!-- Home Screen Widget Provider (Objective 4) -->
+        <receiver
+            android:name=".widget.StatusBarWidgetProvider"
+            android:exported="true"
+            android:label="@string/widget_name">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+                <action android:name="com.statusbarmanager.app.widget.ACTION_WIDGET_TOGGLE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/status_bar_widget_info" />
+        </receiver>
+
+        <!-- Dedicated Android Accessibility Service for Automating Status Bar Settings & Force Stop -->
         <service
             android:name=".service.StatusBarAccessibilityService"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"

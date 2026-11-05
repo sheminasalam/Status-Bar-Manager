@@ -105,15 +105,36 @@ class StatusBarAccessibilityService : AccessibilityService() {
     }
 
     private suspend fun executeWorkflow(mode: TargetMode) = withContext(Dispatchers.Default) {
-        val isHideMode = mode is TargetMode.HideAll
-        val opTitle = if (isHideMode) "Hiding status bar information" else "Restoring original status bar settings"
+        val appManager = ApplicationManager(applicationContext)
+        val forceStopController = AppForceStopAccessibilityController(applicationContext, this@StatusBarAccessibilityService)
+        val userWhitelist = dataStoreRepository.getWhitelist()
 
-        var checklist = AutomationProgress.defaultChecklist()
+        val isHideMode = mode is TargetMode.HideAll || mode is TargetMode.BothEngage
+        val isForceStopMode = mode is TargetMode.ForceStopOnly || mode is TargetMode.BothEngage
+        val isRestoreMode = mode is TargetMode.RestoreOriginal || mode is TargetMode.BothDisengage
+
+        val engageMode = when (mode) {
+            is TargetMode.HideAll, is TargetMode.RestoreOriginal -> EngageMode.STATUS_BAR_ONLY
+            is TargetMode.ForceStopOnly -> EngageMode.FORCE_STOP_APPS_ONLY
+            is TargetMode.BothEngage, is TargetMode.BothDisengage -> EngageMode.BOTH
+        }
+
+        val opTitle = when {
+            mode is TargetMode.BothEngage -> "StatusBar Manager – Engage (Both)"
+            mode is TargetMode.BothDisengage -> "StatusBar Manager – Disengage"
+            mode is TargetMode.ForceStopOnly -> "StatusBar Manager – Force Stop Apps"
+            mode is TargetMode.HideAll -> "StatusBar Manager – Hide Status Bar"
+            else -> "StatusBar Manager – Restore Status Bar"
+        }
+
+        var checklist = AutomationProgress.forMode(engageMode, isEngage = !isRestoreMode)
         fun updateChecklist(id: String, status: StepStatus, details: String? = null) {
             checklist = checklist.map { item ->
                 if (item.id == id) item.copy(status = status, details = details) else item
             }
         }
+
+        var currentAppStats = AppForceStopStats()
 
         fun publish(
             step: AutomationStep,
@@ -121,6 +142,7 @@ class StatusBarAccessibilityService : AccessibilityService() {
             percent: Int,
             stepIdx: Int,
             iconStats: IconStats = _progressState.value.iconStats,
+            appStats: AppForceStopStats = currentAppStats,
             headphoneStatus: String = _progressState.value.headphoneStatus,
             isPartial: Boolean = _progressState.value.isPartialResult
         ) {
@@ -130,9 +152,10 @@ class StatusBarAccessibilityService : AccessibilityService() {
                 currentOperation = opDescription,
                 percentage = percent,
                 stepIndex = stepIdx,
-                totalSteps = 7,
+                totalSteps = checklist.size,
                 checklist = checklist,
                 iconStats = iconStats,
+                appStats = appStats,
                 headphoneStatus = headphoneStatus,
                 isPartialResult = isPartial
             )
@@ -143,26 +166,35 @@ class StatusBarAccessibilityService : AccessibilityService() {
         publish(AutomationStep.STARTING, "Preparing automation environment...", 5, 0)
         delay(400)
 
-        // Step 1: Open Settings
-        publish(AutomationStep.OPENING_SETTINGS, "Opening phone Settings...", 12, 1)
-        launchSettings()
-        delay(1100)
+        // ----------------------------------------------------
+        // PHASE 1: STATUS BAR AUTOMATION (if applicable)
+        // ----------------------------------------------------
+        var isPartial = false
+        var headphoneStatusText = "Not checked"
+        var stats = IconStats()
 
-        // Step 2: Locate Notifications & Status Bar
-        publish(AutomationStep.NAVIGATING_TO_NOTIFICATIONS_STATUS_BAR, "Navigating to Notifications & status bar...", 18, 2)
-        var reachedSection = navigateToNotificationsAndStatusBar()
-        if (!reachedSection) {
-            scrollForward()
-            delay(500)
-            reachedSection = navigateToNotificationsAndStatusBar()
-        }
-        delay(900)
+        if (isHideMode || (isRestoreMode && mode !is TargetMode.ForceStopOnly)) {
+            // Step 1: Open Settings
+            publish(AutomationStep.OPENING_SETTINGS, "Opening phone Settings...", 12, 1)
+            launchSettings()
+            delay(1100)
 
-        // Step 3: Enter Status Bar section
-        publish(AutomationStep.NAVIGATING_TO_STATUS_BAR, "Opening Status bar settings...", 26, 3)
-        val reachedStatusBar = navigateToStatusBarSection()
-        if (!reachedStatusBar) {
-            throw IllegalStateException("Could not find 'Status bar' section in Settings. Please open it manually.")
+            // Step 2: Locate Notifications & Status Bar
+            publish(AutomationStep.NAVIGATING_TO_NOTIFICATIONS_STATUS_BAR, "Navigating to Notifications & status bar...", 18, 2)
+            var reachedSection = navigateToNotificationsAndStatusBar()
+            if (!reachedSection) {
+                scrollForward()
+                delay(500)
+                reachedSection = navigateToNotificationsAndStatusBar()
+            }
+            delay(900)
+
+            // Step 3: Enter Status Bar section
+            publish(AutomationStep.NAVIGATING_TO_STATUS_BAR, "Opening Status bar settings...", 26, 3)
+            val reachedStatusBar = navigateToStatusBarSection()
+            if (!reachedStatusBar) {
+                throw IllegalStateException("Could not find 'Status bar' section in Settings. Please open it manually.")
+            }
         }
         delay(900)
 
@@ -266,45 +298,101 @@ class StatusBarAccessibilityService : AccessibilityService() {
             delay(600)
         }
 
-        // Step 7: Wired Headphone Indicator Inspection (Objective 2)
-        updateChecklist("headphone", StepStatus.IN_PROGRESS)
-        publish(AutomationStep.CHECKING_HEADPHONE_INDICATOR, "Inspecting wired headphone indicator controls...", 92, 7, iconStats = stats)
-        val headphoneResult = inspectAndConfigureHeadphoneSetting(mode)
-        val isHeadphoneSupported = headphoneResult.isSupported
-        val headphoneMessage = headphoneResult.message
+        // ----------------------------------------------------
+        // PHASE 2: APPLICATION FORCE STOP AUTOMATION (if applicable)
+        // ----------------------------------------------------
+        if (isForceStopMode) {
+            updateChecklist("scan_apps", StepStatus.IN_PROGRESS)
+            updateChecklist("apps", StepStatus.IN_PROGRESS)
+            publish(AutomationStep.SCANNING_APPLICATIONS, "Scanning eligible user applications...", 60, 5, iconStats = stats)
+            
+            val eligibleApps = appManager.getEligibleAppsForForceStop(userWhitelist)
+            Log.i(TAG, "Discovered ${eligibleApps.size} eligible applications for force-stop batch")
+            updateChecklist("scan_apps", StepStatus.COMPLETED, "${eligibleApps.size} eligible apps")
 
-        val isPartial = !isHeadphoneSupported
-        val headphoneStatusText = if (isHeadphoneSupported) {
-            "Configured supported headphone icon control"
-        } else {
-            "System-managed wired headphone icon – no supported visibility control found."
+            currentAppStats = currentAppStats.copy(
+                totalEligible = eligibleApps.size,
+                remaining = eligibleApps.size
+            )
+
+            if (eligibleApps.isNotEmpty()) {
+                var stoppedCount = 0
+                var alreadyStoppedCount = 0
+                var failedCount = 0
+
+                updateChecklist("force_stop", StepStatus.IN_PROGRESS)
+
+                eligibleApps.forEachIndexed { idx, app ->
+                    val appProgressPercent = 60 + ((idx + 1) * 35 / eligibleApps.size)
+                    currentAppStats = currentAppStats.copy(
+                        currentAppName = app.appName,
+                        remaining = eligibleApps.size - idx
+                    )
+
+                    publish(
+                        AutomationStep.FORCE_STOPPING_APPS,
+                        "Force-stopping ${app.appName} (${idx + 1}/${eligibleApps.size})...",
+                        appProgressPercent,
+                        6,
+                        iconStats = stats,
+                        appStats = currentAppStats
+                    )
+
+                    val result = forceStopController.forceStopApp(app)
+                    when (result) {
+                        ForceStopResult.SUCCESSFULLY_STOPPED -> {
+                            stoppedCount++
+                            currentAppStats = currentAppStats.copy(successfullyStopped = stoppedCount)
+                        }
+                        ForceStopResult.ALREADY_STOPPED -> {
+                            alreadyStoppedCount++
+                            currentAppStats = currentAppStats.copy(alreadyStopped = alreadyStoppedCount)
+                        }
+                        ForceStopResult.FAILED_OPENING_SETTINGS,
+                        ForceStopResult.FAILED_CONFIRMATION,
+                        ForceStopResult.UNAVAILABLE_OR_DISABLED -> {
+                            failedCount++
+                            currentAppStats = currentAppStats.copy(failed = failedCount)
+                            isPartial = true
+                        }
+                        else -> { }
+                    }
+                    delay(300)
+                }
+
+                currentAppStats = currentAppStats.copy(remaining = 0)
+                val appSummary = "$stoppedCount stopped, $alreadyStoppedCount already off, $failedCount failed"
+                updateChecklist("force_stop", if (failedCount == 0) StepStatus.COMPLETED else StepStatus.PARTIAL, appSummary)
+                updateChecklist("apps", if (failedCount == 0) StepStatus.COMPLETED else StepStatus.PARTIAL, appSummary)
+            } else {
+                updateChecklist("force_stop", StepStatus.COMPLETED, "0 eligible apps to process")
+                updateChecklist("apps", StepStatus.COMPLETED, "0 eligible apps to process")
+            }
         }
-        updateChecklist(
-            "headphone",
-            if (isHeadphoneSupported) StepStatus.COMPLETED else StepStatus.PARTIAL,
-            headphoneStatusText
-        )
-        delay(600)
 
-        // Step 8: Final Verification & State Persistence
+        // Final verification & state persistence
         updateChecklist("verify", StepStatus.IN_PROGRESS)
         publish(
             AutomationStep.VERIFYING_CONFIGURATION,
-            "Verifying status bar configuration...",
-            96,
+            "Verifying applied states and saving records...",
+            98,
             7,
             iconStats = stats,
+            appStats = currentAppStats,
             headphoneStatus = headphoneStatusText,
             isPartial = isPartial
         )
         delay(600)
 
-        if (isHideMode) {
+        if (isHideMode || isForceStopMode) {
             dataStoreRepository.setHideActive(active = true, isPartial = isPartial)
-            val logMsg = if (isPartial) {
-                "Status bar icons hidden (Partial: Wired headphone indicator is system-managed)"
-            } else {
-                "All status bar information hidden successfully"
+            val logMsg = when {
+                engageMode == EngageMode.FORCE_STOP_APPS_ONLY ->
+                    "Force stop completed: ${currentAppStats.successfullyStopped} stopped, ${currentAppStats.alreadyStopped} already off"
+                isPartial ->
+                    "Engaged with partial result: System-managed headphone or restricted apps reported accurately"
+                else ->
+                    "Status bar hidden and eligible applications force-stopped successfully"
             }
             dataStoreRepository.recordOperation(if (isPartial) "PARTIAL" else "SUCCESS", logMsg)
             updateChecklist("verify", StepStatus.COMPLETED)
@@ -314,19 +402,21 @@ class StatusBarAccessibilityService : AccessibilityService() {
                 100,
                 7,
                 iconStats = stats,
+                appStats = currentAppStats,
                 headphoneStatus = headphoneStatusText,
                 isPartial = isPartial
             )
         } else {
             backupManager.markRestoredSuccessfully()
-            dataStoreRepository.recordOperation("SUCCESS", "Original status bar configuration restored successfully")
+            dataStoreRepository.recordOperation("SUCCESS", "Original status bar configuration restored successfully. No apps restarted.")
             updateChecklist("verify", StepStatus.COMPLETED)
             publish(
                 AutomationStep.COMPLETED,
-                "Original configuration restored successfully",
+                "Original configuration restored successfully (stopped apps remain stopped)",
                 100,
                 7,
                 iconStats = stats,
+                appStats = currentAppStats,
                 headphoneStatus = "Restored",
                 isPartial = false
             )

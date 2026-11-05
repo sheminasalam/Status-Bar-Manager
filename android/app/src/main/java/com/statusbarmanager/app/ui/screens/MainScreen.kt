@@ -34,6 +34,9 @@ fun MainScreen(
     lastOperation: Triple<String, String, Long>,
     automationProgress: AutomationProgress,
     compatibilityManager: DeviceCompatibilityManager,
+    engageMode: EngageMode,
+    onSelectEngageMode: (EngageMode) -> Unit,
+    onOpenWhitelist: () -> Unit,
     onToggleMasterSwitch: (Boolean) -> Unit,
     onRestoreOriginal: () -> Unit,
     onRequestAccessibilityPermission: () -> Unit,
@@ -127,6 +130,13 @@ fun MainScreen(
                 isAccessibilityGranted = isAccessibilityGranted,
                 isOverlayGranted = isOverlayGranted,
                 headphoneStatus = automationProgress.headphoneStatus
+            )
+
+            // OBJECTIVE 2: Engage Button Behaviour Card
+            EngageModeCard(
+                currentMode = engageMode,
+                onModeSelected = onSelectEngageMode,
+                onManageWhitelist = onOpenWhitelist
             )
 
             // Floating Overlay Permission Card (Display over other apps)
@@ -840,3 +850,151 @@ fun ManualAssistanceCard(
         }
     }
 }
+
+/**
+ * OBJECTIVE 2: Engage Button Behaviour selector card.
+ * Select between:
+ * - Status Bar Only
+ * - Force Stop Apps Only
+ * - Both (Status Bar + Apps)
+ */
+@Composable
+fun EngageModeCard(
+    currentMode: EngageMode,
+    onModeSelected: (EngageMode) -> Unit,
+    onManageWhitelist: () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(containerColor = DarkSurface),
+        border = androidx.compose.foundation.BorderStroke(1.dp, DarkBorder)
+    ) {
+        Column(modifier = Modifier.padding(18.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier
+                            .size(34.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(BluePrimary.copy(alpha = 0.2f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Tune,
+                            contentDescription = null,
+                            tint = BlueAccent,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Text(
+                        text = "Engage Button Behaviour",
+                        style = MaterialTheme.typography.titleMedium.copy(
+                            fontWeight = FontWeight.Bold,
+                            color = TextPrimary
+                        )
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = "Choose what actions execute when the master Engage switch or Home-Screen Widget is activated.",
+                style = MaterialTheme.typography.bodySmall.copy(color = TextSecondary)
+            )
+
+            Spacer(modifier = Modifier.height(14.dp))
+
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                EngageModeRadioItem(
+                    title = "Both (Status Bar + Force Stop Apps)",
+                    description = "Hides status bar and force-stops eligible non-system apps in one smooth batch.",
+                    isSelected = currentMode == EngageMode.BOTH,
+                    onClick = { onModeSelected(EngageMode.BOTH) }
+                )
+
+                EngageModeRadioItem(
+                    title = "Status Bar Only",
+                    description = "Hides clock, network speed, and status icons. Apps are untouched.",
+                    isSelected = currentMode == EngageMode.STATUS_BAR_ONLY,
+                    onClick = { onModeSelected(EngageMode.STATUS_BAR_ONLY) }
+                )
+
+                EngageModeRadioItem(
+                    title = "Force Stop Apps Only",
+                    description = "Force-stops non-system apps via Settings. Status bar remains untouched.",
+                    isSelected = currentMode == EngageMode.FORCE_STOP_APPS_ONLY,
+                    onClick = { onModeSelected(EngageMode.FORCE_STOP_APPS_ONLY) }
+                )
+            }
+
+            Spacer(modifier = Modifier.height(14.dp))
+
+            // Button to open Protected Apps / Whitelist
+            FilledTonalButton(
+                onClick = onManageWhitelist,
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp),
+                colors = ButtonDefaults.filledTonalButtonColors(
+                    containerColor = DarkSurfaceElevated,
+                    contentColor = TextPrimary
+                )
+            ) {
+                Icon(imageVector = Icons.Default.Shield, contentDescription = null, modifier = Modifier.size(16.dp), tint = SuccessEmerald)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Manage Protected Apps / Whitelist", fontWeight = FontWeight.SemiBold)
+            }
+        }
+    }
+}
+
+@Composable
+fun EngageModeRadioItem(
+    title: String,
+    description: String,
+    isSelected: Boolean,
+    onClick: () -> Unit
+) {
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(12.dp),
+        color = if (isSelected) BlueSurface else DarkSurfaceElevated,
+        border = if (isSelected) androidx.compose.foundation.BorderStroke(1.5.dp, BluePrimary) else androidx.compose.foundation.BorderStroke(1.dp, DarkBorder),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier.padding(14.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            RadioButton(
+                selected = isSelected,
+                onClick = onClick,
+                colors = RadioButtonDefaults.colors(
+                    selectedColor = BluePrimary,
+                    unselectedColor = TextMuted
+                )
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Column {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.bodyMedium.copy(
+                        fontWeight = FontWeight.Bold,
+                        color = if (isSelected) TextPrimary else TextSecondary
+                    )
+                )
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = description,
+                    style = MaterialTheme.typography.labelSmall.copy(color = TextMuted)
+                )
+            }
+        }
+    }
+}
+
