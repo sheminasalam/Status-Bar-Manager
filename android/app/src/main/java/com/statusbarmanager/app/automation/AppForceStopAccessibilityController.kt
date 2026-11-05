@@ -112,35 +112,53 @@ class AppForceStopAccessibilityController(
             return ForceStopResult.UNAVAILABLE_OR_DISABLED
         }
 
-        delay(350)
+        // Step 6 & 7: Handle the native confirmation dialog and verify the
+        // Force stop button becomes disabled. Never report success merely because
+        // the click action was dispatched.
+        var confirmationClicked = false
+        repeat(10) {
+            val activeRoot = service.rootInActiveWindow
+            if (activeRoot != null) {
+                if (!confirmationClicked) {
+                    val confirmNode = findConfirmationButton(activeRoot)
+                    if (confirmNode != null) {
+                        val confirmed = try {
+                            clickNodeOrParent(confirmNode)
+                        } finally {
+                            confirmNode.recycle()
+                        }
+                        if (!confirmed) {
+                            activeRoot.recycle()
+                            Log.e(TAG, "Could not activate Force Stop confirmation for ${appItem.packageName}")
+                            return ForceStopResult.FAILED_CONFIRMATION
+                        }
+                        confirmationClicked = true
+                        Log.i(TAG, "Confirmed Force Stop dialog for ${appItem.packageName}")
+                    }
+                }
 
-        // Step 6: Detect system confirmation dialog and confirm
-        val dialogRoot = service.rootInActiveWindow
-        if (dialogRoot != null) {
-            val confirmNode = findConfirmationButton(dialogRoot)
-            if (confirmNode != null) {
-                clickNodeOrParent(confirmNode)
-                confirmNode.recycle()
-                delay(350)
-            }
-        }
-
-        // Step 7: Verify Force Stop button is now disabled
-        val postRoot = service.rootInActiveWindow
-        if (postRoot != null) {
-            val postButton = findForceStopButton(postRoot)
-            if (postButton != null) {
-                val isNowDisabled = !postButton.isEnabled
-                postButton.recycle()
-                if (isNowDisabled) {
-                    Log.i(TAG, "Successfully confirmed force stop for ${appItem.packageName}")
-                    return ForceStopResult.SUCCESSFULLY_STOPPED
+                val postButton = findForceStopButton(activeRoot)
+                if (postButton != null) {
+                    val isNowDisabled = !postButton.isEnabled
+                    postButton.recycle()
+                    activeRoot.recycle()
+                    if (isNowDisabled) {
+                        Log.i(TAG, "Verified Force Stop for ${appItem.packageName}")
+                        return ForceStopResult.SUCCESSFULLY_STOPPED
+                    }
+                } else {
+                    activeRoot.recycle()
                 }
             }
+            delay(250)
         }
 
-        // If dialog was confirmed, treat as success
-        return ForceStopResult.SUCCESSFULLY_STOPPED
+        Log.e(
+            TAG,
+            "Could not verify that Force Stop completed for ${appItem.packageName}; " +
+                "confirmationClicked=$confirmationClicked"
+        )
+        return ForceStopResult.FAILED_CONFIRMATION
     }
 
     private fun openAppDetailsSettings(packageName: String): Boolean {
