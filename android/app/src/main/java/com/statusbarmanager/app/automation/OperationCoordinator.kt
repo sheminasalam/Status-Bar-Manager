@@ -2,7 +2,6 @@ package com.statusbarmanager.app.automation
 
 import android.content.Context
 import android.util.Log
-import android.provider.Settings
 import com.statusbarmanager.app.data.DataStoreRepository
 import com.statusbarmanager.app.data.SettingsBackupManager
 import com.statusbarmanager.app.service.StatusBarAccessibilityService
@@ -44,10 +43,6 @@ class OperationCoordinator(
             return false
         }
 
-        if (!Settings.canDrawOverlays(context)) {
-            Log.e(TAG, "Cannot engage: full-screen progress permission is required")
-            return false
-        }
         val mode = dataStoreRepository.getEngageMode()
         Log.i(TAG, "Initiating Engage with mode: $mode")
         // Persist the actual mode used for active engagement
@@ -76,8 +71,8 @@ class OperationCoordinator(
         }
 
         val service = StatusBarAccessibilityService.instance
-        if (service == null || !Settings.canDrawOverlays(context)) {
-            Log.e(TAG, "Cannot hide status bar: service or overlay permission is unavailable")
+        if (service == null) {
+            Log.e(TAG, "Cannot hide status bar: accessibility service is unavailable")
             return false
         }
 
@@ -90,8 +85,8 @@ class OperationCoordinator(
     /** Runs the dedicated app-only widget action without changing the configured Hush Button mode. */
     suspend fun forceStopAppsOnly(): Boolean {
         val service = StatusBarAccessibilityService.instance
-        if (service == null || !Settings.canDrawOverlays(context)) {
-            Log.e(TAG, "Cannot stop running apps: service or overlay permission is unavailable")
+        if (service == null) {
+            Log.e(TAG, "Cannot stop running apps: accessibility service is unavailable")
             return false
         }
         // A dedicated Stop Apps widget action must not overwrite an already-active
