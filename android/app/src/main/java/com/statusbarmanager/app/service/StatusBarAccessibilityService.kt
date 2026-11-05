@@ -851,7 +851,7 @@ class StatusBarAccessibilityService : AccessibilityService() {
         queue.add(container)
         while (queue.isNotEmpty()) {
             val current = queue.removeFirst()
-            if (current !== container && current !== exclude && current.isCheckable) {
+            if (current !== container && current != exclude && current.isCheckable) {
                 while (queue.isNotEmpty()) queue.removeFirst().recycle()
                 return current
             }
