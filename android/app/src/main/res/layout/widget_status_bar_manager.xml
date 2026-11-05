@@ -4,30 +4,29 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="@drawable/widget_background"
-    android:orientation="vertical"
-    android:padding="14dp">
+    android:gravity="center_vertical"
+    android:orientation="horizontal"
+    android:padding="8dp">
 
-    <!-- Header Row -->
+    <ImageView
+        android:layout_width="28dp"
+        android:layout_height="28dp"
+        android:layout_marginEnd="8dp"
+        android:contentDescription="@string/app_name"
+        android:src="@drawable/ic_widget_syshush" />
+
     <LinearLayout
-        android:layout_width="match_parent"
+        android:layout_width="0dp"
         android:layout_height="wrap_content"
-        android:gravity="center_vertical"
-        android:orientation="horizontal">
-
-        <ImageView
-            android:layout_width="22dp"
-            android:layout_height="22dp"
-            android:src="@drawable/ic_widget_syshush"
-            android:contentDescription="@string/app_name" />
+        android:layout_weight="1"
+        android:orientation="vertical">
 
         <TextView
-            android:layout_width="0dp"
+            android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:layout_marginStart="8dp"
-            android:text="@string/app_name"
+            android:text="Hush Button"
             android:textColor="#F8FAFC"
-            android:textSize="13sp"
+            android:textSize="12sp"
             android:textStyle="bold" />
 
         <TextView
@@ -36,49 +35,26 @@
             android:layout_height="wrap_content"
             android:text="NORMAL"
             android:textColor="#10B981"
-            android:textSize="10sp"
+            android:textSize="9sp"
             android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/widget_mode_text"
+            android:layout_width="wrap_content"
+            android:layout_height="0dp"
+            android:text=""
+            android:visibility="gone" />
     </LinearLayout>
 
-    <!-- Subtitle / Mode Info -->
-    <TextView
-        android:id="@+id/widget_mode_text"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="4dp"
-        android:text="Mode: Both (Status Bar + Apps)"
-        android:textColor="#94A3B8"
-        android:textSize="11sp" />
-
-    <!-- Progress Indicator (Visible when running) -->
-    <ProgressBar
-        android:id="@+id/widget_progress_bar"
-        style="?android:attr/progressBarStyleHorizontal"
-        android:layout_width="match_parent"
-        android:layout_height="4dp"
-        android:layout_marginTop="6dp"
-        android:max="100"
-        android:progress="0"
-        android:visibility="gone" />
-
-    <!-- Spacer using RemoteViews-compatible TextView -->
-    <TextView
-        android:id="@+id/widget_spacer"
-        android:layout_width="match_parent"
-        android:layout_height="0dp"
-        android:layout_weight="1"
-        android:text="" />
-
-    <!-- Engage / Disengage Action Button -->
     <Button
         android:id="@+id/widget_action_button"
-        android:layout_width="match_parent"
+        android:layout_width="wrap_content"
         android:layout_height="38dp"
         android:background="@drawable/widget_button_background"
-        android:text="Engage"
+        android:minWidth="76dp"
+        android:text="Hush"
         android:textAllCaps="false"
         android:textColor="#FFFFFF"
-        android:textSize="12sp"
+        android:textSize="11sp"
         android:textStyle="bold" />
-
 </LinearLayout>
