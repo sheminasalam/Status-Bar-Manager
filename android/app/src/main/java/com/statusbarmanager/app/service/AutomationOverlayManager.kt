@@ -41,7 +41,6 @@ class AutomationOverlayManager(private val context: Context) {
     private var overlayView: View? = null
     private var attached = false
     private var titleView: TextView? = null
-    private var messageView: TextView? = null
     private var percentView: TextView? = null
     private var progressBar: ProgressBar? = null
     private var doneButton: Button? = null
@@ -104,13 +103,6 @@ class AutomationOverlayManager(private val context: Context) {
             setPadding(0, dp(18), 0, dp(10))
         }.also(root::addView)
 
-        messageView = TextView(context).apply {
-            text = "Applying system changes"
-            setTextColor(Color.rgb(203, 213, 225))
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
-            gravity = Gravity.CENTER
-        }.also(root::addView)
-
         percentView = TextView(context).apply {
             text = "0%"
             setTextColor(Color.rgb(56, 189, 248))
@@ -171,23 +163,12 @@ class AutomationOverlayManager(private val context: Context) {
         val finished = progress.currentStep == AutomationStep.COMPLETED ||
             progress.currentStep == AutomationStep.PARTIAL ||
             progress.currentStep == AutomationStep.FAILED
-        val titleLower = progress.operationTitle.lowercase()
-        val message = when {
-            progress.currentStep == AutomationStep.COMPLETED -> "All done"
-            progress.currentStep == AutomationStep.PARTIAL -> "Finished with some items skipped"
-            progress.currentStep == AutomationStep.FAILED -> "Couldn't complete the operation"
-            titleLower.contains("disengage") || titleLower.contains("restore") -> "Restoring original settings"
-            progress.currentStep == AutomationStep.FORCE_STOPPING_APPS ||
-                progress.currentStep == AutomationStep.SCANNING_APPLICATIONS -> "Stopping recently used apps"
-            else -> "Hushing status bar"
-        }
         titleView?.text = when (progress.currentStep) {
             AutomationStep.COMPLETED -> "Hushed"
             AutomationStep.PARTIAL -> "Partially complete"
             AutomationStep.FAILED -> "Not completed"
             else -> "Hush Button"
         }
-        messageView?.text = message
         percentView?.text = "${progress.percentage.coerceIn(0, 100)}%"
         progressBar?.progress = progress.percentage.coerceIn(0, 100)
         doneButton?.visibility = if (finished) View.VISIBLE else View.GONE
@@ -198,14 +179,11 @@ class AutomationOverlayManager(private val context: Context) {
         val finished = progress.currentStep == AutomationStep.COMPLETED ||
             progress.currentStep == AutomationStep.PARTIAL ||
             progress.currentStep == AutomationStep.FAILED
-        val text = when {
-            progress.currentStep == AutomationStep.COMPLETED -> "All done"
-            progress.currentStep == AutomationStep.PARTIAL -> "Finished with some items skipped"
-            progress.currentStep == AutomationStep.FAILED -> "Operation needs attention"
-            progress.operationTitle.contains("Disengage", ignoreCase = true) -> "Restoring original settings"
-            progress.currentStep == AutomationStep.FORCE_STOPPING_APPS ||
-                progress.currentStep == AutomationStep.SCANNING_APPLICATIONS -> "Stopping recently used apps"
-            else -> "Hushing status bar"
+        val text = when (progress.currentStep) {
+            AutomationStep.COMPLETED -> "All done"
+            AutomationStep.PARTIAL -> "Finished with some items skipped"
+            AutomationStep.FAILED -> "Operation needs attention"
+            else -> "Applying system changes"
         }
         val openIntent = Intent(context, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
