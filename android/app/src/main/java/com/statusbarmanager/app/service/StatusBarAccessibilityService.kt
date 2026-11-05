@@ -458,31 +458,28 @@ class StatusBarAccessibilityService : AccessibilityService() {
      * Reads the actual current Time setting from Settings interface (not hardcoded!)
      */
     private suspend fun readActualCurrentTimeSetting(): String {
-        val root = rootInActiveWindow ?: return StatusBarBackupModel.TIME_SHOW_HOURS_MINUTES
-        val timeNode = findNodeMatching(root, compatibilityManager.timeMenuLabels)
-        if (timeNode != null) {
-            val summary = extractSummaryText(timeNode)
+        val timeNode = waitForMatchingNode(compatibilityManager.timeMenuLabels, attempts = 4)
+            ?: return StatusBarBackupModel.TIME_SHOW_HOURS_MINUTES
+        return try {
+            extractSummaryText(timeNode)?.trim()
+                ?.takeIf { it.isNotBlank() }
+                ?: StatusBarBackupModel.TIME_SHOW_HOURS_MINUTES
+        } finally {
             timeNode.recycle()
-            if (!summary.isNullOrBlank()) {
-                return summary.trim()
-            }
         }
-        return StatusBarBackupModel.TIME_SHOW_HOURS_MINUTES
     }
 
     private suspend fun handleTimeSetting(mode: TargetMode, detectedCurrentTime: String) {
-        val root = rootInActiveWindow
-            ?: throw IllegalStateException("Could not read the current Status bar settings screen.")
-        val timeNode = findNodeMatching(root, compatibilityManager.timeMenuLabels)
-            ?: throw IllegalStateException("Could not find the Time display setting. The clock was not changed.")
+        val timeNode = waitForMatchingNode(compatibilityManager.timeMenuLabels)
+            ?: throw IllegalStateException("Could not find the Time display setting.")
 
-        val opened = clickNodeOrParent(timeNode)
-        timeNode.recycle()
+        val opened = try {
+            clickNodeOrParent(timeNode)
+        } finally {
+            timeNode.recycle()
+        }
         if (!opened) throw IllegalStateException("Could not open the Time display setting.")
-        delay(700)
 
-        val dialogRoot = rootInActiveWindow
-            ?: throw IllegalStateException("The Time display options did not open.")
         val targetLabels = if (mode is TargetMode.HideAll || mode is TargetMode.BothEngage) {
             compatibilityManager.doNotShowLabels
         } else {
@@ -490,34 +487,35 @@ class StatusBarAccessibilityService : AccessibilityService() {
             listOf(backup?.originalTimeSetting ?: detectedCurrentTime)
         }
 
-        val targetOptionNode = findNodeMatching(dialogRoot, targetLabels)
-        if (targetOptionNode != null) {
-            val selected = clickNodeOrParent(targetOptionNode)
-            targetOptionNode.recycle()
-            if (!selected) {
-                throw IllegalStateException("Could not select the requested Time display option: ${targetLabels.first()}.")
+        // Settings animations and OEM preference screens can take longer than one
+        // fixed delay. Reacquire the accessibility tree rather than using a stale root.
+        val targetOptionNode = waitForMatchingNode(targetLabels, attempts = 10, delayMs = 250)
+            ?: run {
+                performGlobalAction(GLOBAL_ACTION_BACK)
+                throw IllegalStateException(
+                    "The Time display options did not appear. Could not select: ${targetLabels.joinToString()}."
+                )
             }
-            delay(350)
-            Log.i(TAG, "Selected Time option: ${targetLabels.first()}")
-        } else {
-            performGlobalAction(GLOBAL_ACTION_BACK)
-            throw IllegalStateException(
-                "The requested Time display option was not found: ${targetLabels.joinToString()}. The clock may still be visible."
-            )
+
+        val selected = try {
+            clickNodeOrParent(targetOptionNode)
+        } finally {
+            targetOptionNode.recycle()
         }
+        if (!selected) throw IllegalStateException("Could not select the requested Time display option.")
+        delay(500)
+        Log.i(TAG, "Selected Time option: ${targetLabels.first()}")
     }
 
     private suspend fun handleNetworkSpeedSetting(mode: TargetMode): Boolean {
-        val root = rootInActiveWindow
-            ?: throw IllegalStateException("Could not read the Status bar screen to configure network speed.")
-        val speedLabelNode = findNodeMatching(root, compatibilityManager.networkSpeedLabels)
-            ?: throw IllegalStateException("Could not find the real-time network speed setting. Network speed was not changed.")
+        val speedLabelNode = waitForMatchingNode(compatibilityManager.networkSpeedLabels)
+            ?: throw IllegalStateException("Could not find the real-time network speed setting.")
 
-        val toggleNode = findAssociatedCheckable(speedLabelNode)
-        speedLabelNode.recycle()
-        if (toggleNode == null) {
-            throw IllegalStateException("Found the network speed setting but could not locate its on/off switch.")
-        }
+        val toggleNode = try {
+            findAssociatedCheckable(speedLabelNode)
+        } finally {
+            speedLabelNode.recycle()
+        } ?: throw IllegalStateException("Could not locate the switch on the real-time network speed row.")
 
         val originalState = toggleNode.isChecked
         val targetState = if (mode is TargetMode.HideAll || mode is TargetMode.BothEngage) {
@@ -526,33 +524,53 @@ class StatusBarAccessibilityService : AccessibilityService() {
             backupManager.getExistingBackup()?.originalRealTimeNetworkSpeed ?: originalState
         }
 
-        if (originalState != targetState) {
-            val changed = clickNodeOrParent(toggleNode)
-            toggleNode.recycle()
-            if (!changed) throw IllegalStateException("Could not change the real-time network speed switch.")
-            delay(450)
-
-            val verifyRoot = rootInActiveWindow
-                ?: throw IllegalStateException("Could not verify the real-time network speed switch.")
-            val verifyLabel = findNodeMatching(verifyRoot, compatibilityManager.networkSpeedLabels)
-                ?: throw IllegalStateException("The network speed setting disappeared before verification.")
-            val verifyToggle = findAssociatedCheckable(verifyLabel)
-            verifyLabel.recycle()
-            if (verifyToggle == null) {
-                throw IllegalStateException("Could not verify the real-time network speed switch state.")
-            }
-            val verifiedState = verifyToggle.isChecked
-            verifyToggle.recycle()
-            if (verifiedState != targetState) {
-                throw IllegalStateException(
-                    "Real-time network speed remained ${if (verifiedState) "ON" else "OFF"}; requested state was ${if (targetState) "ON" else "OFF"}."
-                )
-            }
-            Log.i(TAG, "Verified real-time network speed state: $targetState")
-        } else {
+        if (originalState == targetState) {
             toggleNode.recycle()
             Log.i(TAG, "Real-time network speed already has the requested state: $targetState")
+            return originalState
         }
+
+        val changed = try {
+            clickNodeOrParent(toggleNode)
+        } finally {
+            toggleNode.recycle()
+        }
+        if (!changed) throw IllegalStateException("Could not activate the real-time network speed switch.")
+
+        // Reacquire the row and switch after the Settings UI has updated. Never
+        // trust the old AccessibilityNodeInfo instance after a click.
+        delay(650)
+        var verifiedState: Boolean? = null
+        repeat(6) {
+            val verifyLabel = waitForMatchingNode(
+                compatibilityManager.networkSpeedLabels,
+                attempts = 1,
+                delayMs = 0
+            )
+            if (verifyLabel != null) {
+                val verifyToggle = try {
+                    findAssociatedCheckable(verifyLabel)
+                } finally {
+                    verifyLabel.recycle()
+                }
+                if (verifyToggle != null) {
+                    verifiedState = try {
+                        verifyToggle.isChecked
+                    } finally {
+                        verifyToggle.recycle()
+                    }
+                }
+            }
+            if (verifiedState == targetState) return@repeat
+            delay(180)
+        }
+
+        if (verifiedState != targetState) {
+            throw IllegalStateException(
+                "Network speed switch did not reach the requested ${if (targetState) "ON" else "OFF"} state."
+            )
+        }
+        Log.i(TAG, "Verified real-time network speed state: $verifiedState")
         return originalState
     }
 
@@ -839,28 +857,58 @@ class StatusBarAccessibilityService : AccessibilityService() {
     private fun findAssociatedCheckable(labelNode: AccessibilityNodeInfo): AccessibilityNodeInfo? {
         var parent: AccessibilityNodeInfo? = labelNode.parent
         var depth = 0
-        while (parent != null && depth < 3) {
-            val checkable = findCheckableInChildren(parent, labelNode)
-            if (checkable != null) return checkable
-            parent = parent.parent
+        while (parent != null && depth < 4) {
+            val currentParent = parent
+            val nextParent = currentParent.parent
+            val (checkable, ambiguous) = findUniqueCheckableInChildren(currentParent, labelNode)
+            currentParent.recycle()
+            if (checkable != null) {
+                nextParent?.recycle()
+                return checkable
+            }
+            if (ambiguous) {
+                nextParent?.recycle()
+                Log.w(TAG, "Network speed label is in a container with multiple switches; refusing to toggle an unrelated control.")
+                return null
+            }
+            parent = nextParent
             depth++
         }
         return null
     }
 
-    private fun findCheckableInChildren(container: AccessibilityNodeInfo, exclude: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+    /**
+     * Returns a switch only when the nearest container holding the label has exactly
+     * one checkable descendant. This prevents a broad parent from supplying a
+     * neighbouring setting's switch when the accessibility hierarchy is nested.
+     */
+    private fun findUniqueCheckableInChildren(
+        container: AccessibilityNodeInfo,
+        exclude: AccessibilityNodeInfo
+    ): Pair<AccessibilityNodeInfo?, Boolean> {
         val queue = ArrayDeque<AccessibilityNodeInfo>()
         queue.add(container)
+        var match: AccessibilityNodeInfo? = null
+
         while (queue.isNotEmpty()) {
-            val child = queue.removeFirst()
-            if (child != exclude && child.isCheckable) {
-                return child
+            val node = queue.removeFirst()
+            if (node != exclude && node.isCheckable) {
+                if (match != null) {
+                    match.recycle()
+                    node.recycle()
+                    while (queue.isNotEmpty()) queue.removeFirst().recycle()
+                    return null to true
+                }
+                match = node
+                continue
             }
-            for (i in 0 until child.childCount) {
-                child.getChild(i)?.let { queue.add(it) }
+
+            for (i in 0 until node.childCount) {
+                node.getChild(i)?.let { queue.add(it) }
             }
+            if (node != container) node.recycle()
         }
-        return null
+        return match to false
     }
 
     private fun extractSummaryText(node: AccessibilityNodeInfo): String? {
@@ -878,25 +926,71 @@ class StatusBarAccessibilityService : AccessibilityService() {
         return null
     }
 
+    private suspend fun waitForMatchingNode(
+        candidates: List<String>,
+        attempts: Int = 8,
+        delayMs: Long = 200
+    ): AccessibilityNodeInfo? {
+        repeat(attempts) { attempt ->
+            val root = rootInActiveWindow
+            if (root != null) {
+                val match = findNodeMatching(root, candidates)
+                if (match != null) return match
+            }
+            if (attempt < attempts - 1 && delayMs > 0) delay(delayMs)
+        }
+        return null
+    }
+
+    /**
+     * Prefer exact and leading label matches before considering longer descriptive
+     * text. In particular, "Time" must not accidentally match "Screen timeout".
+     */
     private fun findNodeMatching(root: AccessibilityNodeInfo, candidates: List<String>): AccessibilityNodeInfo? {
+        val normalizedCandidates = candidates.map { it.trim() }.filter { it.isNotEmpty() }
         val queue = ArrayDeque<AccessibilityNodeInfo>()
         queue.add(root)
+        var bestPrefixMatch: AccessibilityNodeInfo? = null
+        var bestLongContainsMatch: AccessibilityNodeInfo? = null
 
         while (queue.isNotEmpty()) {
             val current = queue.removeFirst()
-            val text = current.text
-            val desc = current.contentDescription
+            val values = listOfNotNull(
+                current.text?.toString()?.trim(),
+                current.contentDescription?.toString()?.trim()
+            ).filter { it.isNotEmpty() }
 
-            if (compatibilityManager.matchesAny(text, candidates) || compatibilityManager.matchesAny(desc, candidates)) {
+            if (values.any { value ->
+                normalizedCandidates.any { it.equals(value, ignoreCase = true) }
+            }) {
+                bestPrefixMatch?.recycle()
+                bestLongContainsMatch?.recycle()
                 return current
             }
 
+            if (bestPrefixMatch == null && values.any { value ->
+                normalizedCandidates.any { candidate ->
+                    value.startsWith(candidate, ignoreCase = true) ||
+                        candidate.startsWith(value, ignoreCase = true)
+                }
+            }) {
+                bestPrefixMatch = current
+            } else if (bestLongContainsMatch == null && values.any { value ->
+                normalizedCandidates.any { candidate ->
+                    candidate.length >= 6 && value.contains(candidate, ignoreCase = true)
+                }
+            }) {
+                bestLongContainsMatch = current
+            } else if (current != root) {
+                current.recycle()
+            }
+
             for (i in 0 until current.childCount) {
-                val child = current.getChild(i)
-                if (child != null) queue.add(child)
+                current.getChild(i)?.let { queue.add(it) }
             }
         }
-        return null
+
+        return bestPrefixMatch ?: bestLongContainsMatch
     }
 
     private fun clickNodeOrParent(node: AccessibilityNodeInfo): Boolean {
