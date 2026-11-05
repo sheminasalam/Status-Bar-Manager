@@ -2,5 +2,7 @@
   "name": "StatusBar Manager",
   "description": "Native Android Accessibility Service & Jetpack Compose app to hide or restore system status bar clock and icons via native Settings automation.",
   "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
 }

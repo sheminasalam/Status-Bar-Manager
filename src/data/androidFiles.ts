@@ -870,5 +870,75 @@ jobs:
           path: |
             app/build/outputs/apk/debug/*.apk
             android/app/build/outputs/apk/debug/*.apk`
+  },
+  {
+    path: '.github/workflows/android-debug-apk.yml',
+    name: 'android-debug-apk.yml',
+    language: 'markdown',
+    category: 'Gradle Build',
+    content: `name: Build Android APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "android/**"
+      - ".github/workflows/android-debug-apk.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build debug APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      # FIX FOR: "Warning: Failed to find package 'tools'"
+      # android-actions/setup-android@v3 defaults to 'tools platform-tools'.
+      # Standalone 'tools' is removed from modern SDKs; explicit override is required:
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools'
+
+      - name: Install Android SDK packages
+        run: |
+          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Set up Gradle 8.9
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.9"
+
+      - name: Build debug APK
+        run: |
+          if [ -f "./android/gradlew" ]; then
+            chmod +x ./android/gradlew
+            ./android/gradlew -p android --no-daemon clean assembleDebug
+          else
+            gradle -p android --no-daemon clean assembleDebug
+          fi
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: StatusBar-Manager-debug-apk
+          path: |
+            android/app/build/outputs/apk/debug/*.apk
+            app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 14`
   }
 ];

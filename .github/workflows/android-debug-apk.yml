@@ -29,6 +29,8 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools'
 
       - name: Install Android SDK packages
         run: |
@@ -40,12 +42,20 @@ jobs:
           gradle-version: "8.9"
 
       - name: Build debug APK
-        run: gradle -p android --no-daemon clean assembleDebug
+        run: |
+          if [ -f "./android/gradlew" ]; then
+            chmod +x ./android/gradlew
+            ./android/gradlew -p android --no-daemon clean assembleDebug
+          else
+            gradle -p android --no-daemon clean assembleDebug
+          fi
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
           name: StatusBar-Manager-debug-apk
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          path: |
+            android/app/build/outputs/apk/debug/*.apk
+            app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
           retention-days: 14
