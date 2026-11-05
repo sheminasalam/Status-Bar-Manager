@@ -80,6 +80,98 @@ kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "ko
 `
   );
 
+  zip.file(
+    'gradle/wrapper/gradle-wrapper.properties',
+    `distributionBase=GRADLE_USER_HOME
+distributionPath=wrapper/dists
+distributionUrl=https\\://services.gradle.org/distributions/gradle-8.11.1-bin.zip
+networkTimeout=10000
+validateDistributionUrl=true
+zipStoreBase=GRADLE_USER_HOME
+zipStorePath=wrapper/dists
+`
+  );
+
+  zip.file(
+    'gradlew',
+    `#!/bin/sh
+APP_NAME="Gradle"
+APP_BASE_NAME=\`basename "$0"\`
+CLASSPATH=$APP_HOME/gradle/wrapper/gradle-wrapper.jar
+if [ -n "$JAVA_HOME" ] ; then
+    JAVACMD="$JAVA_HOME/bin/java"
+else
+    JAVACMD="java"
+fi
+exec "$JAVACMD" -Dorg.gradle.appname="$APP_BASE_NAME" -classpath "$CLASSPATH" org.gradle.wrapper.GradleWrapperMain "$@"
+`
+  );
+
+  zip.file(
+    '.github/workflows/build-apk.yml',
+    `name: Build debug APK
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build debug APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'gradle'
+
+      # Fix for: "Warning: Failed to find package 'tools'"
+      # Legacy 'tools' package was removed from Android SDK repositories.
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          accept-android-sdk-licenses: true
+          log-accepted-android-sdk-licenses: true
+          packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Grant execute permission for gradlew
+        run: |
+          if [ -f "./gradlew" ]; then
+            chmod +x ./gradlew
+          elif [ -f "./android/gradlew" ]; then
+            chmod +x ./android/gradlew
+          fi
+
+      - name: Build Debug APK
+        run: |
+          if [ -f "./gradlew" ]; then
+            ./gradlew assembleDebug --stacktrace
+          elif [ -f "./android/gradlew" ]; then
+            cd android && ./gradlew assembleDebug --stacktrace
+          fi
+
+      - name: Upload Debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-debug
+          path: |
+            app/build/outputs/apk/debug/*.apk
+            android/app/build/outputs/apk/debug/*.apk
+`
+  );
+
   // Add all Android files from dataset
   for (const file of ANDROID_FILES) {
     zip.file(file.path, file.content);

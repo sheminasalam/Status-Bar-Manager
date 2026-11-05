@@ -171,6 +171,42 @@ export const ArchitectureDoc: React.FC = () => {
           <div>adb shell settings put secure accessibility_enabled 1</div>
         </div>
       </div>
+
+      {/* GitHub Actions CI/CD Fix for 'Failed to find package tools' */}
+      <div className="p-5 rounded-xl bg-gradient-to-br from-red-950/30 to-[#111827] border border-red-500/40">
+        <div className="flex items-center space-x-2 text-white font-bold text-xs mb-2">
+          <ShieldAlert className="w-4 h-4 text-red-400" />
+          <span>GitHub Actions Fix: &quot;Warning: Failed to find package &apos;tools&apos;&quot; (Exit code 1)</span>
+        </div>
+        <p className="text-[11px] text-gray-300 leading-relaxed mb-3">
+          <strong>Root Cause:</strong> In <code className="text-red-300 font-mono">android-actions/setup-android@v3</code>,
+          specifying <code className="text-red-300 font-mono">packages: tools platform-tools</code> causes <code className="text-red-300 font-mono">sdkmanager</code> to fail
+          because Google removed the legacy <code className="text-red-300 font-mono">tools</code> package from modern SDK repositories.
+        </p>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 font-mono text-[11px]">
+          <div className="p-3 bg-red-950/40 border border-red-500/30 rounded-lg">
+            <span className="text-red-400 font-bold block mb-1">❌ Broken (in your workflow):</span>
+            <pre className="text-gray-300 whitespace-pre overflow-x-auto">{`- name: Set up Android SDK
+  uses: android-actions/setup-android@v3
+  with:
+    packages: tools platform-tools`}</pre>
+          </div>
+
+          <div className="p-3 bg-emerald-950/40 border border-emerald-500/30 rounded-lg">
+            <span className="text-emerald-400 font-bold block mb-1">✅ Fixed Solution:</span>
+            <pre className="text-gray-200 whitespace-pre overflow-x-auto">{`- name: Set up Android SDK
+  uses: android-actions/setup-android@v3
+  with:
+    accept-android-sdk-licenses: true
+    packages: 'platform-tools platforms;android-35 build-tools;35.0.0'`}</pre>
+          </div>
+        </div>
+
+        <p className="text-[11px] text-gray-400 mt-3">
+          A ready-to-run workflow file has been generated at <code className="text-blue-300 font-mono">.github/workflows/build-apk.yml</code> and is included in the project export.
+        </p>
+      </div>
     </div>
   );
 };
