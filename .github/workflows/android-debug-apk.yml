@@ -49,25 +49,42 @@ jobs:
 
       # Execute Unit Tests
       - name: Run Unit Tests
+        id: unit_tests
         run: |
           cd android
           gradle --no-daemon testDebugUnitTest
 
-      # Execute Lint
+      # Execute Lint (continues on error so APK build is attempted, but outcome is tracked)
       - name: Run Lint
+        id: lint
+        continue-on-error: true
         run: |
           cd android
           gradle --no-daemon lintDebug
 
-      # Build both Debug and Release APKs
-      - name: Build Debug & Release APKs
+      # Upload Lint reports (always runs if lint step was reached)
+      - name: Upload Lint Reports
+        if: always() && steps.unit_tests.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: SysHush-lint-reports
+          path: |
+            android/app/build/reports/lint-results-debug.*
+            app/build/reports/lint-results-debug.*
+          if-no-files-found: warn
+          retention-days: 14
+
+      # Build Debug APK (runs even if Lint failed)
+      - name: Build Debug APK
+        id: build_debug
+        if: steps.unit_tests.outcome == 'success'
         run: |
           cd android
-          gradle --no-daemon clean assembleDebug assembleRelease
+          gradle --no-daemon assembleDebug
 
       # Upload Debug APK artifact
       - name: Upload Debug APK
-        if: success()
+        if: steps.build_debug.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: SysHush-debug-apk
@@ -77,9 +94,17 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      # Build Release APK (runs even if Lint failed)
+      - name: Build Release APK
+        id: build_release
+        if: steps.unit_tests.outcome == 'success'
+        run: |
+          cd android
+          gradle --no-daemon assembleRelease
+
       # Upload Release APK artifact
       - name: Upload Release APK
-        if: success()
+        if: steps.build_release.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: SysHush-release-apk
@@ -88,3 +113,27 @@ jobs:
             app/build/outputs/apk/release/*.apk
           if-no-files-found: error
           retention-days: 14
+
+      # Enforce overall job success: fails job if Lint or either APK build failed
+      - name: Verify All Quality Gates Passed
+        if: always()
+        run: |
+          LINT_OUTCOME="${{ steps.lint.outcome }}"
+          DEBUG_OUTCOME="${{ steps.build_debug.outcome }}"
+          RELEASE_OUTCOME="${{ steps.build_release.outcome }}"
+          echo "Lint Outcome: $LINT_OUTCOME"
+          echo "Debug Build Outcome: $DEBUG_OUTCOME"
+          echo "Release Build Outcome: $RELEASE_OUTCOME"
+          if [ "$LINT_OUTCOME" != "success" ]; then
+            echo "::error::Lint check failed! Review uploaded SysHush-lint-reports artifact for details."
+            exit 1
+          fi
+          if [ "$DEBUG_OUTCOME" != "success" ]; then
+            echo "::error::Debug APK build failed!"
+            exit 1
+          fi
+          if [ "$RELEASE_OUTCOME" != "success" ]; then
+            echo "::error::Release APK build failed!"
+            exit 1
+          fi
+          echo "All quality gates passed successfully!"

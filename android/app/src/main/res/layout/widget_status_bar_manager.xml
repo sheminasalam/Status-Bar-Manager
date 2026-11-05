@@ -17,7 +17,7 @@
         <ImageView
             android:layout_width="22dp"
             android:layout_height="22dp"
-            android:src="@mipmap/ic_launcher"
+            android:src="@drawable/ic_widget_syshush"
             android:contentDescription="@string/app_name" />
 
         <TextView
@@ -61,11 +61,13 @@
         android:progress="0"
         android:visibility="gone" />
 
-    <!-- Space -->
-    <View
+    <!-- Spacer using RemoteViews-compatible TextView -->
+    <TextView
+        android:id="@+id/widget_spacer"
         android:layout_width="match_parent"
         android:layout_height="0dp"
-        android:layout_weight="1" />
+        android:layout_weight="1"
+        android:text="" />
 
     <!-- Engage / Disengage Action Button -->
     <Button
