@@ -508,6 +508,8 @@ class StatusBarAccessibilityService : AccessibilityService() {
     }
 
     private suspend fun handleNetworkSpeedSetting(mode: TargetMode): Boolean {
+        // Preserve the original, working Settings interaction: locate the label,
+        // resolve the nearby row switch, and tap only when its current value differs.
         val speedLabelNode = waitForMatchingNode(compatibilityManager.networkSpeedLabels)
             ?: throw IllegalStateException("Could not find the real-time network speed setting.")
 
@@ -515,7 +517,7 @@ class StatusBarAccessibilityService : AccessibilityService() {
             findAssociatedCheckable(speedLabelNode)
         } finally {
             speedLabelNode.recycle()
-        } ?: throw IllegalStateException("Could not locate the switch on the real-time network speed row.")
+        } ?: throw IllegalStateException("Could not find the real-time network speed switch.")
 
         val originalState = toggleNode.isChecked
         val targetState = if (mode is TargetMode.HideAll || mode is TargetMode.BothEngage) {
@@ -524,53 +526,19 @@ class StatusBarAccessibilityService : AccessibilityService() {
             backupManager.getExistingBackup()?.originalRealTimeNetworkSpeed ?: originalState
         }
 
-        if (originalState == targetState) {
+        if (originalState != targetState) {
+            val changed = try {
+                clickNodeOrParent(toggleNode)
+            } finally {
+                toggleNode.recycle()
+            }
+            if (!changed) throw IllegalStateException("Could not change the real-time network speed switch.")
+            delay(350)
+            Log.i(TAG, "Requested real-time network speed state: $targetState")
+        } else {
             toggleNode.recycle()
             Log.i(TAG, "Real-time network speed already has the requested state: $targetState")
-            return originalState
         }
-
-        val changed = try {
-            clickNodeOrParent(toggleNode)
-        } finally {
-            toggleNode.recycle()
-        }
-        if (!changed) throw IllegalStateException("Could not activate the real-time network speed switch.")
-
-        // Reacquire the row and switch after the Settings UI has updated. Never
-        // trust the old AccessibilityNodeInfo instance after a click.
-        delay(650)
-        var verifiedState: Boolean? = null
-        repeat(6) {
-            val verifyLabel = waitForMatchingNode(
-                compatibilityManager.networkSpeedLabels,
-                attempts = 1,
-                delayMs = 0
-            )
-            if (verifyLabel != null) {
-                val verifyToggle = try {
-                    findAssociatedCheckable(verifyLabel)
-                } finally {
-                    verifyLabel.recycle()
-                }
-                if (verifyToggle != null) {
-                    verifiedState = try {
-                        verifyToggle.isChecked
-                    } finally {
-                        verifyToggle.recycle()
-                    }
-                }
-            }
-            if (verifiedState == targetState) return@repeat
-            delay(180)
-        }
-
-        if (verifiedState != targetState) {
-            throw IllegalStateException(
-                "Network speed switch did not reach the requested ${if (targetState) "ON" else "OFF"} state."
-            )
-        }
-        Log.i(TAG, "Verified real-time network speed state: $verifiedState")
         return originalState
     }
 
@@ -855,21 +823,19 @@ class StatusBarAccessibilityService : AccessibilityService() {
     }
 
     private fun findAssociatedCheckable(labelNode: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        // Use the same nearest-parent lookup as the earlier working implementation.
+        // Searching the entire screen or requiring a globally unique switch can miss
+        // valid OEM settings rows or select a neighbouring row's control.
         var parent: AccessibilityNodeInfo? = labelNode.parent
         var depth = 0
-        while (parent != null && depth < 4) {
+        while (parent != null && depth < 3) {
             val currentParent = parent
             val nextParent = currentParent.parent
-            val (checkable, ambiguous) = findUniqueCheckableInChildren(currentParent, labelNode)
+            val checkable = findCheckableInChildren(currentParent, labelNode)
             currentParent.recycle()
             if (checkable != null) {
                 nextParent?.recycle()
                 return checkable
-            }
-            if (ambiguous) {
-                nextParent?.recycle()
-                Log.w(TAG, "Network speed label is in a container with multiple switches; refusing to toggle an unrelated control.")
-                return null
             }
             parent = nextParent
             depth++
@@ -877,38 +843,25 @@ class StatusBarAccessibilityService : AccessibilityService() {
         return null
     }
 
-    /**
-     * Returns a switch only when the nearest container holding the label has exactly
-     * one checkable descendant. This prevents a broad parent from supplying a
-     * neighbouring setting's switch when the accessibility hierarchy is nested.
-     */
-    private fun findUniqueCheckableInChildren(
+    private fun findCheckableInChildren(
         container: AccessibilityNodeInfo,
         exclude: AccessibilityNodeInfo
-    ): Pair<AccessibilityNodeInfo?, Boolean> {
+    ): AccessibilityNodeInfo? {
         val queue = ArrayDeque<AccessibilityNodeInfo>()
         queue.add(container)
-        var match: AccessibilityNodeInfo? = null
-
         while (queue.isNotEmpty()) {
-            val node = queue.removeFirst()
-            if (node != exclude && node.isCheckable) {
-                if (match != null) {
-                    match.recycle()
-                    node.recycle()
-                    while (queue.isNotEmpty()) queue.removeFirst().recycle()
-                    return null to true
-                }
-                match = node
-                continue
+            val current = queue.removeFirst()
+            if (current !== container && current !== exclude && current.isCheckable) {
+                while (queue.isNotEmpty()) queue.removeFirst().recycle()
+                return current
             }
 
-            for (i in 0 until node.childCount) {
-                node.getChild(i)?.let { queue.add(it) }
+            for (i in 0 until current.childCount) {
+                current.getChild(i)?.let { queue.add(it) }
             }
-            if (node != container) node.recycle()
+            if (current !== container) current.recycle()
         }
-        return match to false
+        return null
     }
 
     private fun extractSummaryText(node: AccessibilityNodeInfo): String? {
@@ -935,7 +888,12 @@ class StatusBarAccessibilityService : AccessibilityService() {
             val root = rootInActiveWindow
             if (root != null) {
                 val match = findNodeMatching(root, candidates)
-                if (match != null) return match
+                if (match != null) {
+                    // AccessibilityNodeInfo instances are independent snapshots.
+                    if (match !== root) root.recycle()
+                    return match
+                }
+                root.recycle()
             }
             if (attempt < attempts - 1 && delayMs > 0) delay(delayMs)
         }
@@ -943,8 +901,9 @@ class StatusBarAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * Prefer exact and leading label matches before considering longer descriptive
-     * text. In particular, "Time" must not accidentally match "Screen timeout".
+     * Resolve exact labels first, then safe prefix matches, then longer phrases.
+     * The short candidate "Time" is never matched inside unrelated labels such
+     * as "Screen timeout".
      */
     private fun findNodeMatching(root: AccessibilityNodeInfo, candidates: List<String>): AccessibilityNodeInfo? {
         val normalizedCandidates = candidates.map { it.trim() }.filter { it.isNotEmpty() }
@@ -961,17 +920,17 @@ class StatusBarAccessibilityService : AccessibilityService() {
             ).filter { it.isNotEmpty() }
 
             if (values.any { value ->
-                normalizedCandidates.any { it.equals(value, ignoreCase = true) }
+                normalizedCandidates.any { candidate -> candidate.equals(value, ignoreCase = true) }
             }) {
                 bestPrefixMatch?.recycle()
                 bestLongContainsMatch?.recycle()
+                while (queue.isNotEmpty()) queue.removeFirst().recycle()
                 return current
             }
 
             if (bestPrefixMatch == null && values.any { value ->
                 normalizedCandidates.any { candidate ->
-                    value.startsWith(candidate, ignoreCase = true) ||
-                        candidate.startsWith(value, ignoreCase = true)
+                    value.startsWith(candidate, ignoreCase = true)
                 }
             }) {
                 bestPrefixMatch = current
@@ -981,7 +940,7 @@ class StatusBarAccessibilityService : AccessibilityService() {
                 }
             }) {
                 bestLongContainsMatch = current
-            } else if (current != root) {
+            } else if (current !== root) {
                 current.recycle()
             }
 
@@ -990,6 +949,7 @@ class StatusBarAccessibilityService : AccessibilityService() {
             }
         }
 
+        bestLongContainsMatch?.takeIf { it !== bestPrefixMatch }?.recycle()
         return bestPrefixMatch ?: bestLongContainsMatch
     }
 
