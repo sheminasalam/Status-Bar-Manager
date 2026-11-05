@@ -43,6 +43,7 @@ class AutomationOverlayManager(private val context: Context) {
     private var titleView: TextView? = null
     private var percentView: TextView? = null
     private var progressBar: ProgressBar? = null
+    private var detailView: TextView? = null
     private var doneButton: Button? = null
 
     init {
@@ -121,6 +122,16 @@ class AutomationOverlayManager(private val context: Context) {
             layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(8))
         }.also(root::addView)
 
+        detailView = TextView(context).apply {
+            text = ""
+            setTextColor(Color.rgb(254, 202, 202))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+            gravity = Gravity.CENTER
+            maxLines = 8
+            setPadding(0, dp(22), 0, dp(8))
+            visibility = View.GONE
+        }.also(root::addView)
+
         doneButton = Button(context).apply {
             text = "Done"
             visibility = View.GONE
@@ -129,7 +140,17 @@ class AutomationOverlayManager(private val context: Context) {
                 setColor(Color.rgb(14, 165, 233))
                 cornerRadius = dp(12).toFloat()
             }
-            setOnClickListener { dismiss() }
+            setOnClickListener {
+                dismiss()
+                val intent = Intent(context, MainActivity::class.java).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                }
+                try {
+                    context.startActivity(intent)
+                } catch (_: Exception) {
+                    // The overlay is still dismissed even if Android blocks the app launch.
+                }
+            }
             layoutParams = LinearLayout.LayoutParams(dp(180), dp(48)).apply {
                 gravity = Gravity.CENTER
                 topMargin = dp(30)
@@ -171,6 +192,18 @@ class AutomationOverlayManager(private val context: Context) {
         }
         percentView?.text = "${progress.percentage.coerceIn(0, 100)}%"
         progressBar?.progress = progress.percentage.coerceIn(0, 100)
+
+        if (progress.currentStep == AutomationStep.FAILED) {
+            detailView?.text = progress.errorReason
+                ?: progress.currentOperation
+                ?: "SysHush could not complete this operation."
+            detailView?.visibility = View.VISIBLE
+            doneButton?.text = "Back to SysHush"
+        } else {
+            detailView?.text = ""
+            detailView?.visibility = View.GONE
+            doneButton?.text = "Done"
+        }
         doneButton?.visibility = if (finished) View.VISIBLE else View.GONE
     }
 
