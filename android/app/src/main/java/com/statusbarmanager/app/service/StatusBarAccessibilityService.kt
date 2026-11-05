@@ -181,11 +181,12 @@ class StatusBarAccessibilityService : AccessibilityService() {
 
             // Step 2: Locate Notifications & Status Bar
             publish(AutomationStep.NAVIGATING_TO_NOTIFICATIONS_STATUS_BAR, "Navigating to Notifications & status bar...", 18, 2)
-            var reachedSection = navigateToNotificationsAndStatusBar()
+            val reachedSection = navigateToNotificationsAndStatusBar()
             if (!reachedSection) {
-                scrollForward()
-                delay(500)
-                reachedSection = navigateToNotificationsAndStatusBar()
+                throw IllegalStateException(
+                    "Could not find the Notifications / status bar settings entry on this device. " +
+                        "Open Settings and check the menu path for status bar controls."
+                )
             }
             delay(900)
 
@@ -432,24 +433,105 @@ class StatusBarAccessibilityService : AccessibilityService() {
         startActivity(intent)
     }
 
-    private fun navigateToNotificationsAndStatusBar(): Boolean {
-        val root = rootInActiveWindow ?: return false
-        val node = findNodeMatching(root, compatibilityManager.notificationsAndStatusBarLabels)
-        if (node != null) {
-            val clicked = clickNodeOrParent(node)
-            node.recycle()
-            return clicked
+    private suspend fun navigateToNotificationsAndStatusBar(): Boolean =
+        navigateToSettingsEntry(
+            candidates = compatibilityManager.notificationsAndStatusBarLabels,
+            maxScrolls = 5
+        )
+
+    private suspend fun navigateToStatusBarSection(): Boolean =
+        navigateToSettingsEntry(
+            candidates = compatibilityManager.statusBarSectionLabels,
+            maxScrolls = 8
+        )
+
+    /**
+     * Settings layouts differ across OEMs and may load asynchronously. Search the
+     * visible accessibility tree repeatedly, prefer an actionable row over a static
+     * page heading, and scroll the actual scrollable container when necessary.
+     */
+    private suspend fun navigateToSettingsEntry(
+        candidates: List<String>,
+        maxScrolls: Int
+    ): Boolean {
+        repeat(maxScrolls + 1) { attempt ->
+            val root = rootInActiveWindow
+            if (root != null) {
+                val node = findClickableNodeMatching(root, candidates)
+                if (node != null) {
+                    val clicked = try {
+                        clickNodeOrParent(node)
+                    } finally {
+                        if (node !== root) node.recycle()
+                    }
+                    root.recycle()
+                    if (clicked) {
+                        // Wait for the Settings activity/fragment transition before
+                        // deciding that the destination page failed to open.
+                        delay(650)
+                        return true
+                    }
+                } else {
+                    root.recycle()
+                }
+            }
+
+            if (attempt < maxScrolls) {
+                scrollForward()
+                delay(350)
+            }
         }
         return false
     }
 
-    private fun navigateToStatusBarSection(): Boolean {
-        val root = rootInActiveWindow ?: return false
-        val node = findNodeMatching(root, compatibilityManager.statusBarSectionLabels)
-        if (node != null) {
-            val clicked = clickNodeOrParent(node)
-            node.recycle()
-            return clicked
+    /**
+     * Exact/prefix matching only. Generic contains matching is deliberately avoided
+     * for navigation so "App notifications" cannot be mistaken for "Notifications".
+     */
+    private fun findClickableNodeMatching(
+        root: AccessibilityNodeInfo,
+        candidates: List<String>
+    ): AccessibilityNodeInfo? {
+        val normalized = candidates.map { it.trim() }.filter { it.isNotEmpty() }
+        val queue = ArrayDeque<AccessibilityNodeInfo>()
+        queue.add(root)
+
+        while (queue.isNotEmpty()) {
+            val current = queue.removeFirst()
+            val values = listOfNotNull(
+                current.text?.toString()?.trim(),
+                current.contentDescription?.toString()?.trim()
+            ).filter { it.isNotEmpty() }
+
+            val matches = values.any { value ->
+                normalized.any { candidate ->
+                    candidate.equals(value, ignoreCase = true) ||
+                        value.startsWith(candidate, ignoreCase = true)
+                }
+            }
+
+            if (matches && hasClickableTarget(current)) {
+                while (queue.isNotEmpty()) queue.removeFirst().recycle()
+                return current
+            }
+
+            for (index in 0 until current.childCount) {
+                current.getChild(index)?.let(queue::add)
+            }
+            if (current !== root) current.recycle()
+        }
+        return null
+    }
+
+    private fun hasClickableTarget(node: AccessibilityNodeInfo): Boolean {
+        if (node.isClickable) return true
+        var parent = node.parent
+        while (parent != null) {
+            val clickable = parent.isClickable
+            val next = if (clickable) null else parent.parent
+            parent.recycle()
+            if (clickable) return true
+            parent = next
         }
         return false
     }
@@ -979,16 +1061,32 @@ class StatusBarAccessibilityService : AccessibilityService() {
         return dispatchGesture(gesture, null, null)
     }
 
-    private fun scrollForward(): Boolean {
-        val root = rootInActiveWindow ?: return false
-        val scrolled = root.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)
-        root.recycle()
-        return scrolled
-    }
+    private fun scrollForward(): Boolean =
+        performScrollAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)
 
-    private fun scrollToTop(): Boolean {
+    private fun scrollToTop(): Boolean =
+        performScrollAction(AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD)
+
+    private fun performScrollAction(action: Int): Boolean {
         val root = rootInActiveWindow ?: return false
-        val scrolled = root.performAction(AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD)
+        val queue = ArrayDeque<AccessibilityNodeInfo>()
+        queue.add(root)
+        var scrolled = false
+
+        while (queue.isNotEmpty() && !scrolled) {
+            val node = queue.removeFirst()
+            if (node.isScrollable) {
+                scrolled = node.performAction(action)
+            }
+            if (!scrolled) {
+                for (index in 0 until node.childCount) {
+                    node.getChild(index)?.let(queue::add)
+                }
+            }
+            if (node !== root) node.recycle()
+        }
+
+        while (queue.isNotEmpty()) queue.removeFirst().recycle()
         root.recycle()
         return scrolled
     }
