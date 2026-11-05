@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">StatusBar Manager</string>
+    <string name="accessibility_service_label">StatusBar Manager Assistant</string>
+    <string name="accessibility_service_description">Automates navigation to Android System Settings to adjust or restore status bar clock, network speed, and status icon visibility at user request. This service remains completely idle outside of requested operations and never collects, records, or transmits any personal data.</string>
+</resources>
