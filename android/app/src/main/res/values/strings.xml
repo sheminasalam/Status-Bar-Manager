@@ -4,7 +4,8 @@
     <string name="app_description">Control your status bar and manage background applications with one simple action.</string>
     <string name="widget_name">SysHush Widget</string>
     <string name="widget_hush_button_name">Hush Button</string>
-    <string name="widget_stop_apps_name">Stop Recent Apps</string>
+    <string name="widget_stop_apps_name">Stop Running Apps</string>
+    <string name="widget_status_bar_only_name">Status Bar Only</string>
     <string name="accessibility_service_label">SysHush Assistant</string>
     <string name="accessibility_service_description">Automates navigation to Android System Settings to adjust or restore status bar clock, network speed, status icon visibility, and force-stop eligible non-system apps at user request. This service remains completely idle outside of requested operations and never collects, records, or transmits any personal data.</string>
 </resources>
