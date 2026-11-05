@@ -146,6 +146,24 @@ class MainActivity : ComponentActivity() {
                         },
                         onViewBackupDetails = {
                             showBackupDialog = true
+                        },
+                        onToggleStatusBarOnly = {
+                            if (!isAccessibilityGranted) {
+                                showOnboardingDialog = true
+                            } else if (!automationManager.canDrawOverlays()) {
+                                automationManager.openOverlaySettings()
+                            } else {
+                                coroutineScope.launch { coordinator.toggleStatusBarOnly() }
+                            }
+                        },
+                        onStopAppsOnly = {
+                            if (!isAccessibilityGranted) {
+                                showOnboardingDialog = true
+                            } else if (!automationManager.canDrawOverlays()) {
+                                automationManager.openOverlaySettings()
+                            } else {
+                                coroutineScope.launch { coordinator.forceStopAppsOnly() }
+                            }
                         }
                     )
                 }
