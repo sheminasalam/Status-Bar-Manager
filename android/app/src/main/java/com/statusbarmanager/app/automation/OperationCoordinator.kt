@@ -8,6 +8,7 @@ import com.statusbarmanager.app.data.SettingsBackupManager
 import com.statusbarmanager.app.service.StatusBarAccessibilityService
 import com.statusbarmanager.app.widget.StatusBarWidgetProvider
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
 
 /**
  * OBJECTIVE 2: Central Operation Controller.
@@ -59,6 +60,29 @@ class OperationCoordinator(
         }
 
         service.startAutomation(targetMode)
+        StatusBarWidgetProvider.updateAllWidgets(context)
+        return true
+    }
+
+    /**
+     * Toggles only the status-bar workflow without changing the configured Hush Button mode.
+     * Restoring the status bar never relaunches apps that were force-stopped earlier.
+     */
+    suspend fun toggleStatusBarOnly(): Boolean {
+        val isCurrentlyActive = dataStoreRepository.isHideActiveFlow.first()
+        val activeMode = dataStoreRepository.getActiveEngagementMode()
+        if (isCurrentlyActive && activeMode != EngageMode.FORCE_STOP_APPS_ONLY) {
+            return disengage()
+        }
+
+        val service = StatusBarAccessibilityService.instance
+        if (service == null || !Settings.canDrawOverlays(context)) {
+            Log.e(TAG, "Cannot hide status bar: service or overlay permission is unavailable")
+            return false
+        }
+
+        dataStoreRepository.setActiveEngagementMode(EngageMode.STATUS_BAR_ONLY)
+        service.startAutomation(TargetMode.HideAll)
         StatusBarWidgetProvider.updateAllWidgets(context)
         return true
     }
