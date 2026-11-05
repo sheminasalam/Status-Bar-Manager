@@ -9,9 +9,10 @@ import com.statusbarmanager.app.automation.SettingsAutomationManager
 import com.statusbarmanager.app.automation.TargetMode
 import com.statusbarmanager.app.data.DataStoreRepository
 import com.statusbarmanager.app.data.SettingsBackupManager
+import com.statusbarmanager.app.ui.screens.BackupDetailsDialog
 import com.statusbarmanager.app.ui.screens.MainScreen
+import com.statusbarmanager.app.ui.screens.OnboardingDialog
 import com.statusbarmanager.app.ui.theme.StatusBarManagerTheme
-import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
 
@@ -29,9 +30,6 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             StatusBarManagerTheme {
-                val coroutineScope = rememberCoroutineScope()
-
-                // State from DataStore and Accessibility Service
                 val isHideActive by dataStoreRepository.isHideActiveFlow.collectAsState(initial = false)
                 val hasBackup by dataStoreRepository.hasBackupFlow.collectAsState(initial = false)
                 val backupModel by dataStoreRepository.backupModelFlow.collectAsState(initial = null)
@@ -39,17 +37,21 @@ class MainActivity : ComponentActivity() {
                     initial = Triple("IDLE", "Ready to configure", 0L)
                 )
 
-                // Track Accessibility Permission
                 var isAccessibilityGranted by remember {
                     mutableStateOf(automationManager.isAccessibilityPermissionGranted())
                 }
+                var isOverlayGranted by remember {
+                    mutableStateOf(automationManager.canDrawOverlays())
+                }
 
-                // Automation Progress from service
+                var showOnboardingDialog by remember { mutableStateOf(false) }
+                var showBackupDialog by remember { mutableStateOf(false) }
+
                 val automationProgress by automationManager.progressState.collectAsState()
 
-                // Update accessibility state whenever activity resumes
                 DisposableEffect(Unit) {
                     isAccessibilityGranted = automationManager.isAccessibilityPermissionGranted()
+                    isOverlayGranted = automationManager.canDrawOverlays()
                     onDispose { }
                 }
 
@@ -58,12 +60,13 @@ class MainActivity : ComponentActivity() {
                     hasBackup = hasBackup,
                     backupModel = backupModel,
                     isAccessibilityGranted = isAccessibilityGranted,
+                    isOverlayGranted = isOverlayGranted,
                     lastOperation = lastOperation,
                     automationProgress = automationProgress,
                     compatibilityManager = compatibilityManager,
                     onToggleMasterSwitch = { shouldHide ->
                         if (!isAccessibilityGranted) {
-                            automationManager.openAccessibilitySettings()
+                            showOnboardingDialog = true
                             return@MainScreen
                         }
 
@@ -75,7 +78,7 @@ class MainActivity : ComponentActivity() {
                     },
                     onRestoreOriginal = {
                         if (!isAccessibilityGranted) {
-                            automationManager.openAccessibilitySettings()
+                            showOnboardingDialog = true
                             return@MainScreen
                         }
                         automationManager.triggerAutomation(TargetMode.RestoreOriginal)
@@ -83,19 +86,39 @@ class MainActivity : ComponentActivity() {
                     onRequestAccessibilityPermission = {
                         automationManager.openAccessibilitySettings()
                     },
+                    onRequestOverlayPermission = {
+                        automationManager.openOverlaySettings()
+                    },
                     onOpenSystemSettings = {
                         automationManager.openSystemSettings()
                     },
                     onViewBackupDetails = {
-                        // View backup details action
+                        showBackupDialog = true
                     }
                 )
+
+                if (showOnboardingDialog) {
+                    OnboardingDialog(
+                        onDismiss = { showOnboardingDialog = false },
+                        onOpenSettings = {
+                            showOnboardingDialog = false
+                            automationManager.openAccessibilitySettings()
+                        }
+                    )
+                }
+
+                if (showBackupDialog) {
+                    BackupDetailsDialog(
+                        backup = backupModel,
+                        onDismiss = { showBackupDialog = false }
+                    )
+                }
             }
         }
     }
 
     override fun onResume() {
         super.onResume()
-        // Recheck accessibility permission on returning from system settings
+        // Permissions re-checked by DisposableEffect
     }
 }

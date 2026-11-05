@@ -186,15 +186,45 @@ export const NativeSettingsView: React.FC<NativeSettingsViewProps> = ({
             <SettingToggleItem
               icon={<Radio className="w-4 h-4 text-blue-400" />}
               label="Mobile network / SIM"
-              description="Signal reception and data network indicators"
-              checked={settings.statusIcons.mobileData}
+              description="Signal reception and cellular data indicators"
+              checked={settings.statusIcons['Mobile network'] ?? settings.statusIcons['mobileData'] ?? true}
               onChange={(val) =>
                 onUpdateSettings((prev) => ({
                   ...prev,
-                  statusIcons: { ...prev.statusIcons, mobileData: val }
+                  statusIcons: { ...prev.statusIcons, 'Mobile network': val, mobileData: val }
                 }))
               }
-              isHighlighted={highlightTarget === 'icon_mobileData'}
+              isHighlighted={highlightTarget === 'icon_Mobile network' || highlightTarget === 'icon_mobileData'}
+            />
+
+            {/* VoLTE (Voice over LTE) */}
+            <SettingToggleItem
+              icon={<Radio className="w-4 h-4 text-sky-400" />}
+              label="VoLTE"
+              description="Voice over LTE high-definition call indicator"
+              checked={settings.statusIcons['VoLTE'] ?? true}
+              onChange={(val) =>
+                onUpdateSettings((prev) => ({
+                  ...prev,
+                  statusIcons: { ...prev.statusIcons, VoLTE: val }
+                }))
+              }
+              isHighlighted={highlightTarget === 'icon_VoLTE'}
+            />
+
+            {/* VoNR (Voice over New Radio / 5G) */}
+            <SettingToggleItem
+              icon={<Radio className="w-4 h-4 text-teal-400" />}
+              label="VoNR"
+              description="Voice over 5G New Radio call indicator"
+              checked={settings.statusIcons['VoNR'] ?? true}
+              onChange={(val) =>
+                onUpdateSettings((prev) => ({
+                  ...prev,
+                  statusIcons: { ...prev.statusIcons, VoNR: val }
+                }))
+              }
+              isHighlighted={highlightTarget === 'icon_VoNR'}
             />
 
             {/* Wi-Fi */}
@@ -202,14 +232,14 @@ export const NativeSettingsView: React.FC<NativeSettingsViewProps> = ({
               icon={<Wifi className="w-4 h-4 text-cyan-400" />}
               label="Wi-Fi"
               description="Wi-Fi connectivity and standard indicator"
-              checked={settings.statusIcons.wifi}
+              checked={settings.statusIcons['Wi-Fi'] ?? settings.statusIcons['wifi'] ?? true}
               onChange={(val) =>
                 onUpdateSettings((prev) => ({
                   ...prev,
-                  statusIcons: { ...prev.statusIcons, wifi: val }
+                  statusIcons: { ...prev.statusIcons, 'Wi-Fi': val, wifi: val }
                 }))
               }
-              isHighlighted={highlightTarget === 'icon_wifi'}
+              isHighlighted={highlightTarget === 'icon_Wi-Fi' || highlightTarget === 'icon_wifi'}
             />
 
             {/* Bluetooth */}
@@ -217,14 +247,14 @@ export const NativeSettingsView: React.FC<NativeSettingsViewProps> = ({
               icon={<Bluetooth className="w-4 h-4 text-indigo-400" />}
               label="Bluetooth"
               description="Bluetooth active & connected badge"
-              checked={settings.statusIcons.bluetooth}
+              checked={settings.statusIcons['Bluetooth'] ?? settings.statusIcons['bluetooth'] ?? true}
               onChange={(val) =>
                 onUpdateSettings((prev) => ({
                   ...prev,
-                  statusIcons: { ...prev.statusIcons, bluetooth: val }
+                  statusIcons: { ...prev.statusIcons, Bluetooth: val, bluetooth: val }
                 }))
               }
-              isHighlighted={highlightTarget === 'icon_bluetooth'}
+              isHighlighted={highlightTarget === 'icon_Bluetooth' || highlightTarget === 'icon_bluetooth'}
             />
 
             {/* Alarm */}
@@ -232,14 +262,14 @@ export const NativeSettingsView: React.FC<NativeSettingsViewProps> = ({
               icon={<Bell className="w-4 h-4 text-yellow-400" />}
               label="Alarm"
               description="Active scheduled alarm icon"
-              checked={settings.statusIcons.alarm}
+              checked={settings.statusIcons['Alarm'] ?? settings.statusIcons['alarm'] ?? true}
               onChange={(val) =>
                 onUpdateSettings((prev) => ({
                   ...prev,
-                  statusIcons: { ...prev.statusIcons, alarm: val }
+                  statusIcons: { ...prev.statusIcons, Alarm: val, alarm: val }
                 }))
               }
-              isHighlighted={highlightTarget === 'icon_alarm'}
+              isHighlighted={highlightTarget === 'icon_Alarm' || highlightTarget === 'icon_alarm'}
             />
 
             {/* NFC */}
@@ -247,29 +277,29 @@ export const NativeSettingsView: React.FC<NativeSettingsViewProps> = ({
               icon={<Shield className="w-4 h-4 text-orange-400" />}
               label="NFC"
               description="Near Field Communication enabled icon"
-              checked={settings.statusIcons.nfc}
+              checked={settings.statusIcons['NFC'] ?? settings.statusIcons['nfc'] ?? false}
               onChange={(val) =>
                 onUpdateSettings((prev) => ({
                   ...prev,
-                  statusIcons: { ...prev.statusIcons, nfc: val }
+                  statusIcons: { ...prev.statusIcons, NFC: val, nfc: val }
                 }))
               }
-              isHighlighted={highlightTarget === 'icon_nfc'}
+              isHighlighted={highlightTarget === 'icon_NFC' || highlightTarget === 'icon_nfc'}
             />
 
-            {/* Earphones */}
+            {/* Earphones / Headset */}
             <SettingToggleItem
               icon={<Headphones className="w-4 h-4 text-pink-400" />}
               label="Earphones / Headset"
-              description="Wired or wireless headphone profile"
-              checked={settings.statusIcons.earphones}
+              description="Wireless audio profile indicator (if exposed by OEM)"
+              checked={settings.statusIcons['Earphones'] ?? settings.statusIcons['earphones'] ?? false}
               onChange={(val) =>
                 onUpdateSettings((prev) => ({
                   ...prev,
-                  statusIcons: { ...prev.statusIcons, earphones: val }
+                  statusIcons: { ...prev.statusIcons, Earphones: val, earphones: val }
                 }))
               }
-              isHighlighted={highlightTarget === 'icon_earphones'}
+              isHighlighted={highlightTarget === 'icon_Earphones' || highlightTarget === 'icon_earphones'}
             />
 
             {/* Battery icon (actual icon, not percentage) */}
@@ -284,7 +314,7 @@ export const NativeSettingsView: React.FC<NativeSettingsViewProps> = ({
                   batteryIcon: val
                 }))
               }
-              isHighlighted={highlightTarget === 'icon_battery'}
+              isHighlighted={highlightTarget === 'icon_Battery' || highlightTarget === 'icon_battery'}
             />
           </div>
         )}

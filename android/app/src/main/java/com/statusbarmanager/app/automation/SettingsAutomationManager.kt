@@ -3,6 +3,7 @@ package com.statusbarmanager.app.automation
 import android.accessibilityservice.AccessibilityServiceInfo
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.provider.Settings
 import android.view.accessibility.AccessibilityManager
 import com.statusbarmanager.app.service.StatusBarAccessibilityService
@@ -14,7 +15,7 @@ class SettingsAutomationManager(private val context: Context) {
     val progressState: StateFlow<AutomationProgress> = StatusBarAccessibilityService.progressState
 
     /**
-     * Checks whether the user has granted the accessibility permission
+     * Checks whether the user has enabled the Accessibility Service
      */
     fun isAccessibilityPermissionGranted(): Boolean {
         val am = context.getSystemService(Context.ACCESSIBILITY_SERVICE) as? AccessibilityManager ?: return false
@@ -24,13 +25,40 @@ class SettingsAutomationManager(private val context: Context) {
     }
 
     /**
-     * Opens system Accessibility Settings screen to let user enable the service
+     * Checks whether Display over other apps (floating progress overlay) permission is granted
+     */
+    fun canDrawOverlays(): Boolean {
+        return Settings.canDrawOverlays(context)
+    }
+
+    /**
+     * Opens system Accessibility Settings screen
      */
     fun openAccessibilitySettings() {
         val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK
         }
         context.startActivity(intent)
+    }
+
+    /**
+     * Opens Display over other apps settings for floating overlay progress
+     */
+    fun openOverlaySettings() {
+        val intent = Intent(
+            Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+            Uri.parse("package:${context.packageName}")
+        ).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+        }
+        try {
+            context.startActivity(intent)
+        } catch (e: Exception) {
+            val genericIntent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            }
+            context.startActivity(genericIntent)
+        }
     }
 
     /**

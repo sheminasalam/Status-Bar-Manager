@@ -111,6 +111,21 @@ fun BackupDetailsDialog(
                                 fontWeight = FontWeight.Bold
                             )
                         }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text("Wired Headphones:", color = TextSecondary)
+                            Text(
+                                if (backup.hasHeadphoneControl) {
+                                    if (backup.originalHeadphoneSetting == true) "Visible" else "Hidden"
+                                } else {
+                                    "System-managed"
+                                },
+                                color = if (backup.hasHeadphoneControl) TextPrimary else WarningAmber,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
                     }
 
                     Spacer(modifier = Modifier.height(16.dp))

@@ -98,7 +98,9 @@ export const PhoneSimulator: React.FC<PhoneSimulatorProps> = ({
           deviceModel: 'OnePlus 12',
           manufacturer: 'OnePlus',
           androidVersion: 15,
-          isHideActive: true
+          isHideActive: true,
+          isPartial: true,
+          headphoneStatus: 'System-managed wired headphone icon – no supported visibility control found.'
         });
       }
 
@@ -117,44 +119,48 @@ export const PhoneSimulator: React.FC<PhoneSimulatorProps> = ({
       setSettings((prev) => ({ ...prev, realTimeNetworkSpeed: false }));
       await new Promise((r) => setTimeout(r, 800));
 
-      // Step 7: Disable all status icons
+      // Step 7: Disable all status icons dynamically
       setCurrentStepId('toggling_icons');
-      setStepMessage('Disabling every available status icon in Status icons submenu...');
+      setStepMessage('Discovered 8 status icon toggles: Disabling active toggles (VoLTE, VoNR, 5G, Wi-Fi, BT, Alarm)...');
       setStepIndex(6);
       setHighlightTarget('status_icons_menu');
       setSettings((prev) => ({
         ...prev,
         batteryIcon: false,
         statusIcons: {
+          'Mobile network': false,
           mobileData: false,
+          VoLTE: false,
+          VoNR: false,
+          'Wi-Fi': false,
           wifi: false,
+          Bluetooth: false,
           bluetooth: false,
+          Alarm: false,
           alarm: false,
+          NFC: false,
           nfc: false,
-          earphones: false,
-          hotspot: false,
-          vpn: false,
-          dataSaving: false,
-          highPerformance: false
+          Earphones: false,
+          earphones: false
         }
       }));
       await new Promise((r) => setTimeout(r, 900));
 
-      // Step 8: Verify and return to app
+      // Step 8: Verify and check wired headphone indicator
       setCurrentStepId('verifying');
-      setStepMessage('Verifying applied states from Settings UI...');
+      setStepMessage('Checking wired headphone visibility: System-managed wired headphone icon – no supported visibility control found.');
       setStepIndex(7);
       setIsHideActive(true);
-      await new Promise((r) => setTimeout(r, 800));
+      await new Promise((r) => setTimeout(r, 900));
 
       setActiveScreen('app');
       setCurrentStepId('completed');
-      setStepMessage('Status bar information hidden successfully across the entire phone.');
+      setStepMessage('Status bar hidden (Result: Partial. Wired headphone icon is system-managed with no exposed control).');
       setHighlightTarget(null);
     } else {
       // RESTORE WORKFLOW
       setCurrentStepId('changing_time');
-      setStepMessage('Restoring original Time display setting...');
+      setStepMessage('Restoring exact baseline Time display setting...');
       setStepIndex(4);
       setHighlightTarget('time');
       const origTime = backupData?.timeDisplay || 'Show hours and minutes';
@@ -162,7 +168,7 @@ export const PhoneSimulator: React.FC<PhoneSimulatorProps> = ({
       await new Promise((r) => setTimeout(r, 800));
 
       setCurrentStepId('toggling_speed');
-      setStepMessage('Restoring original Real-time network speed...');
+      setStepMessage('Restoring exact baseline Real-time network speed...');
       setStepIndex(5);
       setHighlightTarget('speed');
       const origSpeed = backupData ? backupData.realTimeNetworkSpeed : true;
@@ -170,7 +176,7 @@ export const PhoneSimulator: React.FC<PhoneSimulatorProps> = ({
       await new Promise((r) => setTimeout(r, 800));
 
       setCurrentStepId('toggling_icons');
-      setStepMessage('Restoring each status icon to its exact recorded state...');
+      setStepMessage('Restoring each status icon to its exact recorded state (leaving untouched icons OFF)...');
       setStepIndex(6);
       setHighlightTarget('status_icons_menu');
       if (backupData) {
@@ -178,16 +184,20 @@ export const PhoneSimulator: React.FC<PhoneSimulatorProps> = ({
           ...prev,
           batteryIcon: true,
           statusIcons: {
+            'Mobile network': backupData.statusIcons['Mobile network'] ?? backupData.statusIcons.mobileData ?? true,
             mobileData: backupData.statusIcons.mobileData ?? true,
+            VoLTE: backupData.statusIcons.VoLTE ?? true,
+            VoNR: backupData.statusIcons.VoNR ?? true,
+            'Wi-Fi': backupData.statusIcons['Wi-Fi'] ?? backupData.statusIcons.wifi ?? true,
             wifi: backupData.statusIcons.wifi ?? true,
-            bluetooth: backupData.statusIcons.bluetooth ?? false,
+            Bluetooth: backupData.statusIcons['Bluetooth'] ?? backupData.statusIcons.bluetooth ?? true,
+            bluetooth: backupData.statusIcons.bluetooth ?? true,
+            Alarm: backupData.statusIcons['Alarm'] ?? backupData.statusIcons.alarm ?? true,
             alarm: backupData.statusIcons.alarm ?? true,
+            NFC: backupData.statusIcons['NFC'] ?? backupData.statusIcons.nfc ?? false,
             nfc: backupData.statusIcons.nfc ?? false,
-            earphones: backupData.statusIcons.earphones ?? false,
-            hotspot: backupData.statusIcons.hotspot ?? false,
-            vpn: backupData.statusIcons.vpn ?? false,
-            dataSaving: backupData.statusIcons.dataSaving ?? false,
-            highPerformance: backupData.statusIcons.highPerformance ?? false
+            Earphones: backupData.statusIcons['Earphones'] ?? backupData.statusIcons.earphones ?? false,
+            earphones: backupData.statusIcons.earphones ?? false
           }
         }));
       }
@@ -197,7 +207,7 @@ export const PhoneSimulator: React.FC<PhoneSimulatorProps> = ({
       setStepMessage('Verifying restored configuration in Settings UI...');
       setStepIndex(7);
       setIsHideActive(false);
-      setBackupData(null); // Clear backup after confirmed restoration
+      setBackupData(null); // Clear backup only after verified restoration
       await new Promise((r) => setTimeout(r, 800));
 
       setActiveScreen('app');

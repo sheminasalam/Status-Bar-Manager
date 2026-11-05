@@ -17,13 +17,16 @@ class SettingsBackupManager(private val repository: DataStoreRepository) {
     }
 
     /**
-     * Stores the original values.
+     * Stores the actual original baseline values before modifying anything.
      * CRITICAL: Will NOT overwrite an active backup if Hide mode is already enabled!
      */
     suspend fun saveBackupIfNotActive(
         timeSetting: String,
         networkSpeed: Boolean,
-        icons: Map<String, Boolean>
+        icons: Map<String, Boolean>,
+        hasHeadphoneControl: Boolean = false,
+        originalHeadphoneSetting: Boolean? = null,
+        isPartial: Boolean = false
     ): Boolean {
         val alreadyActive = isHideActive()
         if (alreadyActive) {
@@ -38,14 +41,17 @@ class SettingsBackupManager(private val repository: DataStoreRepository) {
             deviceManufacturer = android.os.Build.MANUFACTURER,
             deviceModel = android.os.Build.MODEL,
             androidVersion = android.os.Build.VERSION.SDK_INT,
-            isHideActive = true
+            isHideActive = true,
+            hasHeadphoneControl = hasHeadphoneControl,
+            originalHeadphoneSetting = originalHeadphoneSetting,
+            isPartial = isPartial
         )
         repository.saveOriginalBackup(backup)
         return true
     }
 
     /**
-     * Marks backup as completed restored and clears it.
+     * Marks backup as completed restored and clears it only after verified.
      */
     suspend fun markRestoredSuccessfully() {
         repository.clearBackup()
@@ -55,7 +61,7 @@ class SettingsBackupManager(private val repository: DataStoreRepository) {
      * If restoration was partial, retain the backup and record remaining keys.
      */
     suspend fun recordPartialRestoration(unrestoredKeys: List<String>) {
-        repository.setHideActive(false)
+        repository.setHideActive(active = false, isPartial = true)
         repository.recordOperation(
             status = "PARTIAL",
             message = "Partially restored. Pending verification for: ${unrestoredKeys.joinToString(", ")}"

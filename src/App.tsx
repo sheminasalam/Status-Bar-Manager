@@ -32,17 +32,22 @@ export default function App() {
     batteryPercentage: true,
     batteryIcon: true,
     statusIcons: {
+      'Mobile network': true,
       mobileData: true,
+      VoLTE: true,
+      VoNR: true,
+      'Wi-Fi': true,
       wifi: true,
+      Bluetooth: true,
       bluetooth: true,
+      Alarm: true,
       alarm: true,
-      nfc: false, // originally OFF
-      earphones: false, // originally OFF
-      hotspot: false,
-      vpn: false,
-      dataSaving: false,
-      highPerformance: false
-    }
+      NFC: false,
+      nfc: false,
+      Earphones: false,
+      earphones: false
+    },
+    hasWiredHeadphonesConnected: false
   });
 
   const [backupData, setBackupData] = useState<BackupData | null>(null);

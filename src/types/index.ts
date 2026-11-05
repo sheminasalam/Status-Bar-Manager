@@ -3,20 +3,10 @@ export type TimeDisplayOption = 'Show hours and minutes' | 'Show hours, minutes 
 export interface StatusBarSettings {
   timeDisplay: TimeDisplayOption;
   realTimeNetworkSpeed: boolean;
-  batteryPercentage: boolean; // separate setting: show battery percentage on status bar
-  batteryIcon: boolean; // actual battery icon visibility if supported
-  statusIcons: {
-    mobileData: boolean;
-    wifi: boolean;
-    bluetooth: boolean;
-    alarm: boolean;
-    nfc: boolean;
-    earphones: boolean;
-    hotspot: boolean;
-    vpn: boolean;
-    dataSaving: boolean;
-    highPerformance: boolean;
-  };
+  batteryPercentage: boolean; // separate setting: show battery percentage on status bar (never touched)
+  batteryIcon: boolean; // actual battery icon visibility
+  statusIcons: Record<string, boolean>; // Comprehensive dynamic map including VoLTE, VoNR, 5G, Wi-Fi, etc.
+  hasWiredHeadphonesConnected: boolean; // user simulation toggle to test wired 3.5mm jack
 }
 
 export interface BackupData {
@@ -29,6 +19,8 @@ export interface BackupData {
   manufacturer: string;
   androidVersion: number;
   isHideActive: boolean;
+  isPartial: boolean;
+  headphoneStatus: string;
 }
 
 export type AutomationStepId =
@@ -40,10 +32,28 @@ export type AutomationStepId =
   | 'changing_time'
   | 'toggling_speed'
   | 'navigating_icons'
+  | 'discovering_all_icons'
   | 'toggling_icons'
+  | 'checking_headphone'
   | 'verifying'
   | 'completed'
+  | 'partial'
   | 'failed';
+
+export interface IconStats {
+  discovered: number;
+  disabled: number;
+  alreadyDisabled: number;
+  restored: number;
+  remaining: number;
+}
+
+export interface ProcessChecklistItem {
+  id: string;
+  title: string;
+  status: 'pending' | 'in_progress' | 'completed' | 'partial' | 'failed';
+  details?: string;
+}
 
 export interface AutomationStep {
   id: AutomationStepId;

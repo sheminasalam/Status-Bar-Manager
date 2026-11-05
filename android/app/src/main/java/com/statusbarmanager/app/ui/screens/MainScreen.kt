@@ -1,5 +1,6 @@
 package com.statusbarmanager.app.ui.screens
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
@@ -15,13 +16,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.statusbarmanager.app.automation.AutomationProgress
-import com.statusbarmanager.app.automation.AutomationStep
-import com.statusbarmanager.app.automation.DeviceCompatibilityManager
+import com.statusbarmanager.app.automation.*
 import com.statusbarmanager.app.data.StatusBarBackupModel
 import com.statusbarmanager.app.ui.theme.*
 
@@ -32,18 +30,21 @@ fun MainScreen(
     hasBackup: Boolean,
     backupModel: StatusBarBackupModel?,
     isAccessibilityGranted: Boolean,
+    isOverlayGranted: Boolean,
     lastOperation: Triple<String, String, Long>,
     automationProgress: AutomationProgress,
     compatibilityManager: DeviceCompatibilityManager,
     onToggleMasterSwitch: (Boolean) -> Unit,
     onRestoreOriginal: () -> Unit,
     onRequestAccessibilityPermission: () -> Unit,
+    onRequestOverlayPermission: () -> Unit,
     onOpenSystemSettings: () -> Unit,
     onViewBackupDetails: () -> Unit
 ) {
     val scrollState = rememberScrollState()
     val isRunning = automationProgress.currentStep != AutomationStep.IDLE &&
             automationProgress.currentStep != AutomationStep.COMPLETED &&
+            automationProgress.currentStep != AutomationStep.PARTIAL &&
             automationProgress.currentStep != AutomationStep.FAILED
 
     Scaffold(
@@ -54,8 +55,8 @@ fun MainScreen(
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Box(
                             modifier = Modifier
-                                .size(32.dp)
-                                .clip(RoundedCornerShape(8.dp))
+                                .size(36.dp)
+                                .clip(RoundedCornerShape(10.dp))
                                 .background(BluePrimary),
                             contentAlignment = Alignment.Center
                         ) {
@@ -63,7 +64,7 @@ fun MainScreen(
                                 imageVector = Icons.Default.VisibilityOff,
                                 contentDescription = null,
                                 tint = Color.White,
-                                modifier = Modifier.size(20.dp)
+                                modifier = Modifier.size(22.dp)
                             )
                         }
                         Spacer(modifier = Modifier.width(12.dp))
@@ -76,7 +77,7 @@ fun MainScreen(
                                 )
                             )
                             Text(
-                                text = "Control the visibility of your Android status bar.",
+                                text = "Automate Android system status bar settings",
                                 style = MaterialTheme.typography.labelSmall.copy(color = TextSecondary)
                             )
                         }
@@ -96,7 +97,7 @@ fun MainScreen(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            // Permission Alert Banner if missing
+            // Permission Alert Banner if Accessibility missing
             if (!isAccessibilityGranted) {
                 AccessibilityBanner(onRequestPermission = onRequestAccessibilityPermission)
             }
@@ -106,23 +107,34 @@ fun MainScreen(
                 isHideActive = isHideActive,
                 isRunning = isRunning,
                 isAccessibilityGranted = isAccessibilityGranted,
+                isPartial = backupModel?.isPartial ?: false,
                 onToggle = onToggleMasterSwitch
             )
 
-            // Status Overview Grid (Normal / Hidden / Partially hidden)
+            // Live Comprehensive Automation Progress Panel (Objective 3)
+            if (isRunning || automationProgress.currentStep != AutomationStep.IDLE) {
+                LiveAutomationProgressPanel(
+                    progress = automationProgress,
+                    isRunning = isRunning
+                )
+            }
+
+            // System Status Overview Grid
             StatusOverviewCard(
                 isHideActive = isHideActive,
                 hasBackup = hasBackup,
+                isPartial = backupModel?.isPartial ?: false,
                 isAccessibilityGranted = isAccessibilityGranted,
-                oemName = compatibilityManager.oemDisplayName
+                isOverlayGranted = isOverlayGranted,
+                headphoneStatus = automationProgress.headphoneStatus
             )
 
-            // Live Automation Progress Banner (when active or recently run)
-            if (isRunning || automationProgress.currentStep != AutomationStep.IDLE) {
-                AutomationStatusCard(progress = automationProgress)
+            // Floating Overlay Permission Card (Display over other apps)
+            if (!isOverlayGranted) {
+                OverlayPermissionCard(onRequestPermission = onRequestOverlayPermission)
             }
 
-            // Backup & Restoration Card
+            // Backup & Restoration Card (Objective 4)
             BackupStatusCard(
                 hasBackup = hasBackup,
                 backup = backupModel,
@@ -134,14 +146,14 @@ fun MainScreen(
 
             // Device Compatibility Card
             CompatibilityCard(
-                oemName = compatibilityManager.oemDisplayName,
-                currentOem = compatibilityManager.currentOem.name
+                oemName = compatibilityManager.oemDisplayName
             )
 
             // Manual Assistance & Settings Quick Actions
             ManualAssistanceCard(
                 onOpenSettings = onOpenSystemSettings,
-                onRequestPermission = onRequestAccessibilityPermission
+                onRequestAccessibility = onRequestAccessibilityPermission,
+                onRequestOverlay = onRequestOverlayPermission
             )
 
             Spacer(modifier = Modifier.height(24.dp))
@@ -154,6 +166,7 @@ fun MasterSwitchCard(
     isHideActive: Boolean,
     isRunning: Boolean,
     isAccessibilityGranted: Boolean,
+    isPartial: Boolean,
     onToggle: (Boolean) -> Unit
 ) {
     Card(
@@ -161,7 +174,11 @@ fun MasterSwitchCard(
             .fillMaxWidth()
             .border(
                 width = 1.5.dp,
-                color = if (isHideActive) BlueAccent else DarkBorder,
+                color = when {
+                    isPartial -> WarningAmber
+                    isHideActive -> BlueAccent
+                    else -> DarkBorder
+                },
                 shape = RoundedCornerShape(20.dp)
             ),
         shape = RoundedCornerShape(20.dp),
@@ -187,10 +204,10 @@ fun MasterSwitchCard(
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = if (isHideActive) {
-                            "Clock, real-time speed, and status icons are currently hidden."
-                        } else {
-                            "Hides clock, network speed, Wi-Fi, 5G, and status icons across phone."
+                        text = when {
+                            isPartial -> "Clock, network speed & available icons hidden (Wired headphone icon is system-managed)."
+                            isHideActive -> "Clock, real-time network speed, and all status icons are currently hidden."
+                            else -> "Disables clock, network speed, VoLTE, SIM, Wi-Fi, battery and all available system status icons."
                         },
                         style = MaterialTheme.typography.bodyMedium.copy(color = TextSecondary)
                     )
@@ -204,25 +221,225 @@ fun MasterSwitchCard(
                     enabled = !isRunning && isAccessibilityGranted,
                     colors = SwitchDefaults.colors(
                         checkedThumbColor = Color.White,
-                        checkedTrackColor = BluePrimary,
+                        checkedTrackColor = if (isPartial) WarningAmber else BluePrimary,
                         uncheckedThumbColor = TextMuted,
                         uncheckedTrackColor = DarkSurfaceElevated
                     )
                 )
             }
+        }
+    }
+}
 
-            if (isRunning) {
-                Spacer(modifier = Modifier.height(16.dp))
-                LinearProgressIndicator(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(6.dp)
-                        .clip(CircleShape),
-                    color = BlueAccent,
-                    trackColor = DarkSurfaceElevated
+/**
+ * OBJECTIVE 3: Rich Live Progress Panel with horizontal progress bar, percentage,
+ * operation checklist, and live icon counters.
+ */
+@Composable
+fun LiveAutomationProgressPanel(
+    progress: AutomationProgress,
+    isRunning: Boolean
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(1.dp, BlueAccent.copy(alpha = 0.5f), RoundedCornerShape(18.dp)),
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(containerColor = DarkSurface)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(18.dp)
+        ) {
+            // Header: Title + Percentage
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = when (progress.currentStep) {
+                            AutomationStep.COMPLETED -> Icons.Default.CheckCircle
+                            AutomationStep.PARTIAL -> Icons.Default.Info
+                            AutomationStep.FAILED -> Icons.Default.Error
+                            else -> Icons.Default.Sync
+                        },
+                        contentDescription = null,
+                        tint = when (progress.currentStep) {
+                            AutomationStep.COMPLETED -> SuccessGreen
+                            AutomationStep.PARTIAL -> WarningAmber
+                            AutomationStep.FAILED -> ErrorRed
+                            else -> BlueAccent
+                        },
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = progress.operationTitle.uppercase(),
+                        style = MaterialTheme.typography.labelMedium.copy(
+                            fontWeight = FontWeight.Bold,
+                            color = BlueAccent,
+                            letterSpacing = 1.sp
+                        )
+                    )
+                }
+
+                Text(
+                    text = "${progress.percentage}%",
+                    style = MaterialTheme.typography.titleMedium.copy(
+                        fontWeight = FontWeight.ExtraBold,
+                        color = when (progress.currentStep) {
+                            AutomationStep.COMPLETED -> SuccessGreen
+                            AutomationStep.PARTIAL -> WarningAmber
+                            AutomationStep.FAILED -> ErrorRed
+                            else -> BlueAccent
+                        }
+                    )
                 )
             }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // Determinate Progress Bar
+            LinearProgressIndicator(
+                progress = { progress.percentage / 100f },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(8.dp)
+                    .clip(CircleShape),
+                color = when (progress.currentStep) {
+                    AutomationStep.COMPLETED -> SuccessGreen
+                    AutomationStep.PARTIAL -> WarningAmber
+                    AutomationStep.FAILED -> ErrorRed
+                    else -> BlueAccent
+                },
+                trackColor = DarkSurfaceElevated
+            )
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // Current Operation Text
+            Text(
+                text = progress.currentOperation,
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    fontWeight = FontWeight.SemiBold,
+                    color = TextPrimary
+                )
+            )
+
+            // Icon Statistics Counter (Live)
+            if (progress.iconStats.discovered > 0) {
+                Spacer(modifier = Modifier.height(12.dp))
+                IconStatisticsBox(stats = progress.iconStats)
+            }
+
+            Spacer(modifier = Modifier.height(14.dp))
+
+            // Operation Checklist
+            Text(
+                text = "Process Checklist:",
+                style = MaterialTheme.typography.labelSmall.copy(
+                    fontWeight = FontWeight.Bold,
+                    color = TextMuted
+                )
+            )
+            Spacer(modifier = Modifier.height(6.dp))
+
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                progress.checklist.forEach { item ->
+                    ChecklistRow(item = item)
+                }
+            }
         }
+    }
+}
+
+@Composable
+fun IconStatisticsBox(stats: IconStats) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(DarkSurfaceElevated)
+            .padding(12.dp)
+    ) {
+        Column {
+            Text(
+                text = "STATUS ICON METRICS",
+                style = MaterialTheme.typography.labelSmall.copy(
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = TextMuted
+                )
+            )
+            Spacer(modifier = Modifier.height(6.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                StatColumn(label = "Discovered", count = stats.discovered, color = BlueAccent)
+                StatColumn(label = "Disabled", count = stats.disabled, color = SuccessGreen)
+                StatColumn(label = "Already Off", count = stats.alreadyDisabled, color = TextMuted)
+                StatColumn(label = "Remaining", count = stats.remaining, color = if (stats.remaining > 0) WarningAmber else SuccessGreen)
+            }
+        }
+    }
+}
+
+@Composable
+fun StatColumn(label: String, count: Int, color: Color) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(
+            text = count.toString(),
+            style = MaterialTheme.typography.titleMedium.copy(
+                fontWeight = FontWeight.Bold,
+                color = color
+            )
+        )
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, color = TextSecondary)
+        )
+    }
+}
+
+@Composable
+fun ChecklistRow(item: ProcessChecklistItem) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        val (icon, color, labelText) = when (item.status) {
+            StepStatus.COMPLETED -> Triple(Icons.Default.CheckCircle, SuccessGreen, "Completed")
+            StepStatus.IN_PROGRESS -> Triple(Icons.Default.Sync, BlueAccent, "In progress")
+            StepStatus.PARTIAL -> Triple(Icons.Default.Info, WarningAmber, "Partial")
+            StepStatus.FAILED -> Triple(Icons.Default.Cancel, ErrorRed, "Failed")
+            StepStatus.SKIPPED -> Triple(Icons.Default.RemoveCircleOutline, TextMuted, "Skipped")
+            StepStatus.PENDING -> Triple(Icons.Default.RadioButtonUnchecked, TextMuted, "Pending")
+        }
+
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = color,
+            modifier = Modifier.size(14.dp)
+        )
+        Spacer(modifier = Modifier.width(8.dp))
+        Text(
+            text = item.title,
+            style = MaterialTheme.typography.bodySmall.copy(color = TextPrimary),
+            modifier = Modifier.weight(1f)
+        )
+        Text(
+            text = item.details ?: labelText,
+            style = MaterialTheme.typography.labelSmall.copy(
+                fontWeight = FontWeight.SemiBold,
+                color = color,
+                fontSize = 11.sp
+            )
+        )
     }
 }
 
@@ -230,8 +447,10 @@ fun MasterSwitchCard(
 fun StatusOverviewCard(
     isHideActive: Boolean,
     hasBackup: Boolean,
+    isPartial: Boolean,
     isAccessibilityGranted: Boolean,
-    oemName: String
+    isOverlayGranted: Boolean,
+    headphoneStatus: String
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -254,8 +473,9 @@ fun StatusOverviewCard(
             ) {
                 // Status Badge
                 val (statusText, statusColor) = when {
+                    isPartial -> "Partially hidden" to WarningAmber
                     isHideActive -> "Hidden" to BlueAccent
-                    hasBackup -> "Partially hidden" to WarningAmber
+                    hasBackup -> "Baseline active" to WarningAmber
                     else -> "Normal" to SuccessGreen
                 }
 
@@ -269,9 +489,79 @@ fun StatusOverviewCard(
                 // Accessibility Status Pill
                 StatusPill(
                     label = "Accessibility",
-                    value = if (isAccessibilityGranted) "Active" else "Disabled",
-                    color = if (isAccessibilityGranted) SuccessGreen else ErrorRed,
+                    value = if (isAccessibilityGranted) "Active" to SuccessGreen else "Disabled" to ErrorRed,
                     modifier = Modifier.weight(1f)
+                )
+
+                // Floating Overlay Pill
+                StatusPill(
+                    label = "Floating Overlay",
+                    value = if (isOverlayGranted) "Enabled" to SuccessGreen else "Disabled" to TextMuted,
+                    modifier = Modifier.weight(1f)
+                )
+            }
+
+            // Wired Headphone Limitation Note (Objective 2)
+            if (isPartial || headphoneStatus.contains("System-managed")) {
+                Spacer(modifier = Modifier.height(10.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(DarkSurfaceElevated)
+                        .padding(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Headphones,
+                        contentDescription = null,
+                        tint = WarningAmber,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Wired headphones: Controlled internally by SystemUI (no OEM setting exposed).",
+                        style = MaterialTheme.typography.labelSmall.copy(color = TextSecondary, fontSize = 11.sp)
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun StatusPill(
+    label: String,
+    value: Pair<String, Color>,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(12.dp))
+            .background(DarkSurfaceElevated)
+            .padding(horizontal = 10.dp, vertical = 8.dp)
+    ) {
+        Column {
+            Text(
+                text = label.uppercase(),
+                style = MaterialTheme.typography.labelSmall.copy(color = TextMuted, fontSize = 9.sp)
+            )
+            Spacer(modifier = Modifier.height(2.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier
+                        .size(6.dp)
+                        .clip(CircleShape)
+                        .background(value.second)
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+                Text(
+                    text = value.first,
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        fontWeight = FontWeight.SemiBold,
+                        color = TextPrimary
+                    ),
+                    maxLines = 1
                 )
             }
         }
@@ -285,88 +575,52 @@ fun StatusPill(
     color: Color,
     modifier: Modifier = Modifier
 ) {
-    Box(
-        modifier = modifier
-            .clip(RoundedCornerShape(12.dp))
-            .background(DarkSurfaceElevated)
-            .padding(horizontal = 12.dp, vertical = 10.dp)
-    ) {
-        Column {
-            Text(
-                text = label.uppercase(),
-                style = MaterialTheme.typography.labelSmall.copy(color = TextMuted, fontSize = 10.sp)
-            )
-            Spacer(modifier = Modifier.height(2.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    modifier = Modifier
-                        .size(8.dp)
-                        .clip(CircleShape)
-                        .background(color)
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(
-                    text = value,
-                    style = MaterialTheme.typography.bodyMedium.copy(
-                        fontWeight = FontWeight.SemiBold,
-                        color = TextPrimary
-                    )
-                )
-            }
-        }
-    }
+    StatusPill(label = label, value = value to color, modifier = modifier)
 }
 
 @Composable
-fun AutomationStatusCard(progress: AutomationProgress) {
+fun OverlayPermissionCard(onRequestPermission: () -> Unit) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .border(1.dp, BlueAccent.copy(alpha = 0.5f), RoundedCornerShape(16.dp)),
+            .border(1.dp, BlueAccent.copy(alpha = 0.4f), RoundedCornerShape(16.dp)),
         shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = BlueContainer.copy(alpha = 0.25f))
+        colors = CardDefaults.cardColors(containerColor = DarkSurfaceElevated)
     ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Icon(
-                    imageVector = when (progress.currentStep) {
-                        AutomationStep.COMPLETED -> Icons.Default.CheckCircle
-                        AutomationStep.FAILED -> Icons.Default.Error
-                        else -> Icons.Default.Sync
-                    },
-                    contentDescription = null,
-                    tint = when (progress.currentStep) {
-                        AutomationStep.COMPLETED -> SuccessGreen
-                        AutomationStep.FAILED -> ErrorRed
-                        else -> BlueAccent
-                    },
-                    modifier = Modifier.size(20.dp)
-                )
-                Spacer(modifier = Modifier.width(8.dp))
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = Icons.Default.Layers,
+                contentDescription = null,
+                tint = BlueAccent,
+                modifier = Modifier.size(24.dp)
+            )
+            Spacer(modifier = Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = "Current Operation",
+                    text = "Floating Live Progress Panel",
                     style = MaterialTheme.typography.titleSmall.copy(
                         fontWeight = FontWeight.Bold,
                         color = TextPrimary
                     )
                 )
-            }
-
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                text = progress.message,
-                style = MaterialTheme.typography.bodyMedium.copy(color = TextPrimary)
-            )
-
-            if (progress.totalSteps > 0 && progress.stepIndex > 0) {
-                Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    text = "Step ${progress.stepIndex} of ${progress.totalSteps}",
-                    style = MaterialTheme.typography.labelSmall.copy(color = TextSecondary)
+                    text = "Displays live progress on top of Settings while automation runs.",
+                    style = MaterialTheme.typography.bodySmall.copy(color = TextSecondary, fontSize = 11.sp)
                 )
+            }
+            Spacer(modifier = Modifier.width(8.dp))
+            Button(
+                onClick = onRequestPermission,
+                shape = RoundedCornerShape(8.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = BluePrimary),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+            ) {
+                Text("Enable", color = Color.White, fontSize = 12.sp)
             }
         }
     }
@@ -393,7 +647,7 @@ fun BackupStatusCard(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "Original Settings Backup",
+                    text = "Original Settings Baseline",
                     style = MaterialTheme.typography.titleMedium.copy(
                         fontWeight = FontWeight.SemiBold,
                         color = TextPrimary
@@ -402,23 +656,23 @@ fun BackupStatusCard(
 
                 if (hasBackup) {
                     TextButton(onClick = onViewDetails) {
-                        Text("View Data", color = BlueAccent)
+                        Text("View Baseline", color = BlueAccent)
                     }
                 }
             }
 
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(6.dp))
 
             Text(
                 text = if (hasBackup) {
-                    "Original state preserved. Restores your exact previous Time setting and individual icon toggles."
+                    "Exact original baseline saved (${backup?.originalStatusIcons?.size ?: 0} icons). Restores Time, speed, and each individual icon."
                 } else {
-                    "No active backup. A snapshot of your current settings will be created automatically before hiding."
+                    "No baseline saved yet. A full snapshot of your current settings will be captured before applying Hide mode."
                 },
                 style = MaterialTheme.typography.bodyMedium.copy(color = TextSecondary)
             )
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(14.dp))
 
             Button(
                 onClick = onRestore,
@@ -446,7 +700,7 @@ fun BackupStatusCard(
 }
 
 @Composable
-fun CompatibilityCard(oemName: String, currentOem: String) {
+fun CompatibilityCard(oemName: String) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(16.dp),
@@ -462,7 +716,7 @@ fun CompatibilityCard(oemName: String, currentOem: String) {
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = "Device Compatibility",
+                    text = "Device Compatibility & Target",
                     style = MaterialTheme.typography.titleMedium.copy(
                         fontWeight = FontWeight.SemiBold,
                         color = TextPrimary
@@ -470,7 +724,7 @@ fun CompatibilityCard(oemName: String, currentOem: String) {
                 )
             }
 
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(6.dp))
             Text(
                 text = oemName,
                 style = MaterialTheme.typography.bodyLarge.copy(
@@ -478,9 +732,9 @@ fun CompatibilityCard(oemName: String, currentOem: String) {
                     color = TextPrimary
                 )
             )
-            Spacer(modifier = Modifier.height(4.dp))
+            Spacer(modifier = Modifier.height(2.dp))
             Text(
-                text = "Automates: Settings → Notifications & status bar → Status bar",
+                text = "Target route: Settings → Notifications & status bar → Status bar",
                 style = MaterialTheme.typography.bodySmall.copy(color = TextSecondary)
             )
         }
@@ -515,7 +769,7 @@ fun AccessibilityBanner(onRequestPermission: () -> Unit) {
             }
             Spacer(modifier = Modifier.height(6.dp))
             Text(
-                text = "StatusBar Manager requires Accessibility Service permission to navigate system settings on your behalf without requiring root.",
+                text = "StatusBar Manager requires Accessibility Service permission to navigate system settings on your behalf without requiring root or ADB commands.",
                 style = MaterialTheme.typography.bodyMedium.copy(color = TextPrimary)
             )
             Spacer(modifier = Modifier.height(12.dp))
@@ -533,7 +787,8 @@ fun AccessibilityBanner(onRequestPermission: () -> Unit) {
 @Composable
 fun ManualAssistanceCard(
     onOpenSettings: () -> Unit,
-    onRequestPermission: () -> Unit
+    onRequestAccessibility: () -> Unit,
+    onRequestOverlay: () -> Unit
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -542,15 +797,15 @@ fun ManualAssistanceCard(
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Text(
-                text = "Manual Assistance & Tools",
+                text = "System Tools & Navigation",
                 style = MaterialTheme.typography.titleMedium.copy(
                     fontWeight = FontWeight.SemiBold,
                     color = TextPrimary
                 )
             )
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(6.dp))
             Text(
-                text = "If your device layout requires manual verification or custom icon toggles, you can open native Settings directly.",
+                text = "Quick shortcuts to verify your status bar layout manually or configure permissions.",
                 style = MaterialTheme.typography.bodySmall.copy(color = TextSecondary)
             )
             Spacer(modifier = Modifier.height(12.dp))
@@ -563,15 +818,23 @@ fun ManualAssistanceCard(
                     modifier = Modifier.weight(1f),
                     shape = RoundedCornerShape(10.dp)
                 ) {
-                    Text("Open Settings", color = TextPrimary)
+                    Text("Settings", color = TextPrimary)
                 }
 
                 OutlinedButton(
-                    onClick = onRequestPermission,
+                    onClick = onRequestAccessibility,
                     modifier = Modifier.weight(1f),
                     shape = RoundedCornerShape(10.dp)
                 ) {
                     Text("Accessibility", color = TextPrimary)
+                }
+
+                OutlinedButton(
+                    onClick = onRequestOverlay,
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(10.dp)
+                ) {
+                    Text("Overlay", color = TextPrimary)
                 }
             }
         }

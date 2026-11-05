@@ -33,7 +33,7 @@ class DeviceCompatibilityManager {
 
     val oemDisplayName: String
         get() = when (currentOem) {
-            DeviceOem.COLOR_OS_OXYGEN_OS -> "ColorOS / OxygenOS / Realme UI (Target Hardware)"
+            DeviceOem.COLOR_OS_OXYGEN_OS -> "ColorOS / OxygenOS / Realme UI"
             DeviceOem.SAMSUNG_ONE_UI -> "Samsung One UI"
             DeviceOem.XIAOMI_HYPER_OS -> "Xiaomi HyperOS / MIUI"
             DeviceOem.PIXEL_AOSP -> "Google Pixel / AOSP"
@@ -88,9 +88,25 @@ class DeviceCompatibilityManager {
         "Display network speed"
     )
 
+    // Investigation keywords for Wired Headphone / Earphone indicator controls
+    val wiredHeadphoneCandidateLabels = listOf(
+        "Wired headset",
+        "Wired headphones",
+        "Headset icon",
+        "Earphones",
+        "Headphone indicator",
+        "Wired audio indicator",
+        "Connected audio device icon",
+        "Headphones",
+        "Headset",
+        "Earphone icon",
+        "Audio jack icon"
+    )
+
     /**
-     * Checks if a label refers to battery percentage rather than the actual battery icon.
-     * Requirement: Do not mistake the percentage display option for the battery icon visibility setting.
+     * Strict safety check: Never toggle the battery percentage display option!
+     * The screenshot and specification explicitly demand differentiating between
+     * the actual battery icon vs. the separate "Show battery percentage" setting.
      */
     fun isBatteryPercentageOption(text: String): Boolean {
         val lower = text.lowercase(Locale.ROOT)
@@ -98,18 +114,25 @@ class DeviceCompatibilityManager {
     }
 
     /**
-     * Matches known status bar icons while filtering out prohibited percentage toggles.
+     * Checks if a label inside the status bar page is a known non-icon control
+     * (such as general page headers, back buttons, or navigation items).
      */
-    fun isTargetStatusIconLabel(text: String): Boolean {
-        if (isBatteryPercentageOption(text)) return false
+    fun isDisallowedStatusIconRow(text: String): Boolean {
+        if (isBatteryPercentageOption(text)) return true
         val lower = text.lowercase(Locale.ROOT)
-        val iconKeywords = listOf(
-            "sim", "network", "mobile", "wi-fi", "wifi", "bluetooth",
-            "alarm", "nfc", "earphones", "headset", "hotspot",
-            "vpn", "data saving", "high performance", "ring", "vibrate",
-            "silent", "battery" // battery icon (not percentage)
+        val prohibited = listOf(
+            "notifications", "lock screen", "banner", "badges",
+            "more settings", "manage notifications", "app notifications"
         )
-        return iconKeywords.any { lower.contains(it) }
+        return prohibited.any { lower.contains(it) }
+    }
+
+    /**
+     * Checks if a label represents an audio or headphone indicator setting.
+     */
+    fun isHeadphoneRelatedLabel(text: String): Boolean {
+        val lower = text.lowercase(Locale.ROOT)
+        return wiredHeadphoneCandidateLabels.any { lower.contains(it.lowercase(Locale.ROOT)) }
     }
 
     fun matchesAny(text: CharSequence?, candidates: List<String>): Boolean {

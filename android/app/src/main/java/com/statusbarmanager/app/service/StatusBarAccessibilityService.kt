@@ -5,8 +5,6 @@ import android.accessibilityservice.GestureDescription
 import android.content.Intent
 import android.graphics.Path
 import android.graphics.Rect
-import android.os.Handler
-import android.os.Looper
 import android.provider.Settings
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
@@ -41,15 +39,16 @@ class StatusBarAccessibilityService : AccessibilityService() {
     private val compatibilityManager = DeviceCompatibilityManager()
     private lateinit var dataStoreRepository: DataStoreRepository
     private lateinit var backupManager: SettingsBackupManager
+    private lateinit var overlayManager: AutomationOverlayManager
 
     private var currentAutomationJob: Job? = null
     private var isAutomationRunning = false
-    private var currentMode: TargetMode = TargetMode.HideAll
 
     override fun onCreate() {
         super.onCreate()
         dataStoreRepository = DataStoreRepository(applicationContext)
         backupManager = SettingsBackupManager(dataStoreRepository)
+        overlayManager = AutomationOverlayManager(applicationContext)
         Log.i(TAG, "StatusBarAccessibilityService created.")
     }
 
@@ -64,19 +63,16 @@ class StatusBarAccessibilityService : AccessibilityService() {
         super.onDestroy()
         instance = null
         _isServiceConnected.value = false
+        overlayManager.dismiss()
         serviceScope.cancel()
         Log.i(TAG, "StatusBarAccessibilityService destroyed.")
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        // Accessibility events are monitored during active automation cycles
         if (event == null || !isAutomationRunning) return
-
-        val eventType = event.eventType
         val packageName = event.packageName?.toString() ?: ""
-
         if (packageName.contains("settings", ignoreCase = true)) {
-            Log.d(TAG, "Settings event: type=$eventType from $packageName")
+            Log.d(TAG, "Settings window event: ${event.eventType}")
         }
     }
 
@@ -85,16 +81,12 @@ class StatusBarAccessibilityService : AccessibilityService() {
         cancelAutomation("Accessibility service was interrupted by system.")
     }
 
-    /**
-     * Entry point to launch the Status Bar automation workflow
-     */
     fun startAutomation(mode: TargetMode) {
         if (isAutomationRunning) {
             Log.w(TAG, "Automation is already running.")
             return
         }
 
-        currentMode = mode
         isAutomationRunning = true
         currentAutomationJob?.cancel()
 
@@ -113,63 +105,233 @@ class StatusBarAccessibilityService : AccessibilityService() {
     }
 
     private suspend fun executeWorkflow(mode: TargetMode) = withContext(Dispatchers.Default) {
-        val modeName = if (mode is TargetMode.HideAll) "Hiding" else "Restoring"
-        updateProgress(AutomationStep.STARTING, "$modeName status bar information...", 0, 7)
+        val isHideMode = mode is TargetMode.HideAll
+        val opTitle = if (isHideMode) "Hiding status bar information" else "Restoring original status bar settings"
 
-        // Step 1: Launch Native Settings
-        updateProgress(AutomationStep.OPENING_SETTINGS, "Opening phone Settings...", 1, 7)
+        var checklist = AutomationProgress.defaultChecklist()
+        fun updateChecklist(id: String, status: StepStatus, details: String? = null) {
+            checklist = checklist.map { item ->
+                if (item.id == id) item.copy(status = status, details = details) else item
+            }
+        }
+
+        fun publish(
+            step: AutomationStep,
+            opDescription: String,
+            percent: Int,
+            stepIdx: Int,
+            iconStats: IconStats = _progressState.value.iconStats,
+            headphoneStatus: String = _progressState.value.headphoneStatus,
+            isPartial: Boolean = _progressState.value.isPartialResult
+        ) {
+            val progress = AutomationProgress(
+                currentStep = step,
+                operationTitle = opTitle,
+                currentOperation = opDescription,
+                percentage = percent,
+                stepIndex = stepIdx,
+                totalSteps = 7,
+                checklist = checklist,
+                iconStats = iconStats,
+                headphoneStatus = headphoneStatus,
+                isPartialResult = isPartial
+            )
+            _progressState.value = progress
+            overlayManager.updateProgress(progress)
+        }
+
+        publish(AutomationStep.STARTING, "Preparing automation environment...", 5, 0)
+        delay(400)
+
+        // Step 1: Open Settings
+        publish(AutomationStep.OPENING_SETTINGS, "Opening phone Settings...", 12, 1)
         launchSettings()
-        delay(1200)
+        delay(1100)
 
-        // Step 2: Navigate to "Notifications & status bar"
-        updateProgress(AutomationStep.NAVIGATING_TO_NOTIFICATIONS_STATUS_BAR, "Locating Notifications & status bar...", 2, 7)
+        // Step 2: Locate Notifications & Status Bar
+        publish(AutomationStep.NAVIGATING_TO_NOTIFICATIONS_STATUS_BAR, "Navigating to Notifications & status bar...", 18, 2)
         var reachedSection = navigateToNotificationsAndStatusBar()
         if (!reachedSection) {
-            // Attempt direct search or scroll
-            scrollDown()
-            delay(600)
+            scrollForward()
+            delay(500)
             reachedSection = navigateToNotificationsAndStatusBar()
         }
-        delay(1000)
+        delay(900)
 
-        // Step 3: Navigate into "Status bar"
-        updateProgress(AutomationStep.NAVIGATING_TO_STATUS_BAR, "Opening Status bar settings...", 3, 7)
+        // Step 3: Enter Status Bar section
+        publish(AutomationStep.NAVIGATING_TO_STATUS_BAR, "Opening Status bar settings...", 26, 3)
         val reachedStatusBar = navigateToStatusBarSection()
         if (!reachedStatusBar) {
             throw IllegalStateException("Could not find 'Status bar' section in Settings. Please open it manually.")
         }
-        delay(1000)
+        delay(900)
 
-        // Step 4: Handle "Time" setting
-        updateProgress(AutomationStep.READING_CURRENT_TIME, "Configuring Time display...", 4, 7)
-        handleTimeSetting(mode)
+        // Step 4: Baseline backup & Time display handling
+        updateChecklist("backup", StepStatus.IN_PROGRESS)
+        updateChecklist("time", StepStatus.IN_PROGRESS)
+        publish(AutomationStep.READING_BASELINE_SETTINGS, "Reading current Time display setting...", 34, 4)
+
+        val actualCurrentTime = readActualCurrentTimeSetting()
+        Log.i(TAG, "Actual current Time setting detected: '$actualCurrentTime'")
+
+        // Configure Time display
+        publish(AutomationStep.CONFIGURING_TIME, if (isHideMode) "Setting Time to 'Do not show'..." else "Restoring original Time...", 40, 4)
+        handleTimeSetting(mode, actualCurrentTime)
+        updateChecklist("time", StepStatus.COMPLETED, if (isHideMode) "Set to Do not show" else "Restored: $actualCurrentTime")
         delay(800)
 
-        // Step 5: Handle "Real-time network speed"
-        updateProgress(AutomationStep.TOGGLING_NETWORK_SPEED, "Configuring Real-time network speed...", 5, 7)
-        handleNetworkSpeedSetting(mode)
+        // Step 5: Network speed toggle
+        updateChecklist("speed", StepStatus.IN_PROGRESS)
+        publish(AutomationStep.CONFIGURING_NETWORK_SPEED, "Checking Real-time network speed...", 46, 5)
+        val actualNetworkSpeed = handleNetworkSpeedSetting(mode)
+        updateChecklist("speed", StepStatus.COMPLETED, if (isHideMode) "Disabled" else "Restored")
+        delay(700)
+
+        // Step 6: Comprehensive Status Icons Discovery & Toggle
+        updateChecklist("scan_icons", StepStatus.IN_PROGRESS)
+        publish(AutomationStep.NAVIGATING_TO_STATUS_ICONS, "Accessing Status icons submenu...", 52, 6)
+
+        val navigatedToIcons = navigateIntoStatusIconsSubmenu()
         delay(800)
 
-        // Step 6: Handle Status Icons Submenu
-        updateProgress(AutomationStep.NAVIGATING_TO_STATUS_ICONS, "Configuring Status Icons...", 6, 7)
-        handleStatusIcons(mode)
-        delay(1000)
+        publish(AutomationStep.DISCOVERING_ALL_STATUS_ICONS, "Discovering all available status icons...", 58, 6)
+        // Dynamically discover all checkable switch rows with scrolling
+        val discoveredIconsMap = discoverAllStatusIconRows()
+        Log.i(TAG, "Total status icons dynamically discovered: ${discoveredIconsMap.size} -> ${discoveredIconsMap.keys}")
 
-        // Step 7: Verification & return
-        updateProgress(AutomationStep.VERIFYING_CHANGES, "Verifying applied changes...", 7, 7)
-        delay(600)
+        val discoveredCount = discoveredIconsMap.size
+        val alreadyDisabledCount = discoveredIconsMap.values.count { !it }
+        var stats = IconStats(
+            discovered = discoveredCount,
+            disabled = 0,
+            alreadyDisabled = alreadyDisabledCount,
+            restored = 0,
+            remaining = if (isHideMode) (discoveredCount - alreadyDisabledCount) else discoveredCount
+        )
+        updateChecklist("scan_icons", StepStatus.COMPLETED, "$discoveredCount icons discovered")
+        publish(AutomationStep.DISCOVERING_ALL_STATUS_ICONS, "Discovered $discoveredCount status icons", 65, 6, iconStats = stats)
 
-        if (mode is TargetMode.HideAll) {
-            dataStoreRepository.setHideActive(true)
-            dataStoreRepository.recordOperation("SUCCESS", "Status bar information hidden successfully")
-            updateProgress(AutomationStep.COMPLETED, "Status bar information hidden", 7, 7)
-        } else {
-            backupManager.markRestoredSuccessfully()
-            dataStoreRepository.recordOperation("SUCCESS", "Original configuration restored successfully")
-            updateProgress(AutomationStep.COMPLETED, "Original configuration restored", 7, 7)
+        // Save baseline BEFORE changing any icons if hide mode and no backup exists
+        if (isHideMode) {
+            val existing = backupManager.getExistingBackup()
+            if (existing == null) {
+                backupManager.saveBackupIfNotActive(
+                    timeSetting = actualCurrentTime,
+                    networkSpeed = actualNetworkSpeed,
+                    icons = discoveredIconsMap
+                )
+                updateChecklist("backup", StepStatus.COMPLETED, "Baseline snapshot preserved")
+            } else {
+                updateChecklist("backup", StepStatus.COMPLETED, "Existing baseline protected")
+            }
         }
 
-        // Automatically navigate back to our app
+        // Toggle / Restore icons
+        updateChecklist("toggle_icons", StepStatus.IN_PROGRESS)
+        if (isHideMode) {
+            publish(AutomationStep.DISABLING_ALL_STATUS_ICONS, "Disabling all active status icons...", 70, 6, iconStats = stats)
+            stats = disableAllActiveStatusIcons(discoveredIconsMap) { updatedStats, currentLabel ->
+                stats = updatedStats
+                val pct = 70 + (20 * updatedStats.disabled / maxOf(1, updatedStats.discovered - updatedStats.alreadyDisabled))
+                publish(
+                    AutomationStep.DISABLING_ALL_STATUS_ICONS,
+                    "Disabling '$currentLabel' (${updatedStats.disabled}/${updatedStats.discovered - updatedStats.alreadyDisabled})...",
+                    minOf(90, pct),
+                    6,
+                    iconStats = updatedStats
+                )
+            }
+            updateChecklist("toggle_icons", StepStatus.COMPLETED, "${stats.disabled} icons turned OFF, ${stats.alreadyDisabled} already OFF")
+        } else {
+            publish(AutomationStep.RESTORING_ALL_STATUS_ICONS, "Restoring icons to original states...", 70, 6, iconStats = stats)
+            val originalBackup = backupManager.getExistingBackup()
+            val targetMap = originalBackup?.originalStatusIcons ?: discoveredIconsMap
+            stats = restoreAllStatusIconsToBaseline(targetMap) { updatedStats, currentLabel ->
+                stats = updatedStats
+                val pct = 70 + (20 * updatedStats.restored / maxOf(1, updatedStats.discovered))
+                publish(
+                    AutomationStep.RESTORING_ALL_STATUS_ICONS,
+                    "Restoring '$currentLabel' (${updatedStats.restored}/${updatedStats.discovered})...",
+                    minOf(90, pct),
+                    6,
+                    iconStats = updatedStats
+                )
+            }
+            updateChecklist("toggle_icons", StepStatus.COMPLETED, "${stats.restored} icons restored to exact baseline")
+        }
+
+        // Return from Status icons submenu if entered
+        if (navigatedToIcons) {
+            performGlobalAction(GLOBAL_ACTION_BACK)
+            delay(600)
+        }
+
+        // Step 7: Wired Headphone Indicator Inspection (Objective 2)
+        updateChecklist("headphone", StepStatus.IN_PROGRESS)
+        publish(AutomationStep.CHECKING_HEADPHONE_INDICATOR, "Inspecting wired headphone indicator controls...", 92, 7, iconStats = stats)
+        val headphoneResult = inspectAndConfigureHeadphoneSetting(mode)
+        val isHeadphoneSupported = headphoneResult.isSupported
+        val headphoneMessage = headphoneResult.message
+
+        val isPartial = !isHeadphoneSupported
+        val headphoneStatusText = if (isHeadphoneSupported) {
+            "Configured supported headphone icon control"
+        } else {
+            "System-managed wired headphone icon – no supported visibility control found."
+        }
+        updateChecklist(
+            "headphone",
+            if (isHeadphoneSupported) StepStatus.COMPLETED else StepStatus.PARTIAL,
+            headphoneStatusText
+        )
+        delay(600)
+
+        // Step 8: Final Verification & State Persistence
+        updateChecklist("verify", StepStatus.IN_PROGRESS)
+        publish(
+            AutomationStep.VERIFYING_CONFIGURATION,
+            "Verifying status bar configuration...",
+            96,
+            7,
+            iconStats = stats,
+            headphoneStatus = headphoneStatusText,
+            isPartial = isPartial
+        )
+        delay(600)
+
+        if (isHideMode) {
+            dataStoreRepository.setHideActive(active = true, isPartial = isPartial)
+            val logMsg = if (isPartial) {
+                "Status bar icons hidden (Partial: Wired headphone indicator is system-managed)"
+            } else {
+                "All status bar information hidden successfully"
+            }
+            dataStoreRepository.recordOperation(if (isPartial) "PARTIAL" else "SUCCESS", logMsg)
+            updateChecklist("verify", StepStatus.COMPLETED)
+            publish(
+                if (isPartial) AutomationStep.PARTIAL else AutomationStep.COMPLETED,
+                logMsg,
+                100,
+                7,
+                iconStats = stats,
+                headphoneStatus = headphoneStatusText,
+                isPartial = isPartial
+            )
+        } else {
+            backupManager.markRestoredSuccessfully()
+            dataStoreRepository.recordOperation("SUCCESS", "Original status bar configuration restored successfully")
+            updateChecklist("verify", StepStatus.COMPLETED)
+            publish(
+                AutomationStep.COMPLETED,
+                "Original configuration restored successfully",
+                100,
+                7,
+                iconStats = stats,
+                headphoneStatus = "Restored",
+                isPartial = false
+            )
+        }
+
         delay(1200)
         returnToApp()
     }
@@ -181,7 +343,7 @@ class StatusBarAccessibilityService : AccessibilityService() {
         startActivity(intent)
     }
 
-    private suspend fun navigateToNotificationsAndStatusBar(): Boolean {
+    private fun navigateToNotificationsAndStatusBar(): Boolean {
         val root = rootInActiveWindow ?: return false
         val node = findNodeMatching(root, compatibilityManager.notificationsAndStatusBarLabels)
         if (node != null) {
@@ -192,7 +354,7 @@ class StatusBarAccessibilityService : AccessibilityService() {
         return false
     }
 
-    private suspend fun navigateToStatusBarSection(): Boolean {
+    private fun navigateToStatusBarSection(): Boolean {
         val root = rootInActiveWindow ?: return false
         val node = findNodeMatching(root, compatibilityManager.statusBarSectionLabels)
         if (node != null) {
@@ -203,31 +365,36 @@ class StatusBarAccessibilityService : AccessibilityService() {
         return false
     }
 
-    private suspend fun handleTimeSetting(mode: TargetMode) {
-        val root = rootInActiveWindow ?: return
-        val timeNode = findNodeMatching(root, compatibilityManager.timeMenuLabels) ?: return
-        
-        // Read current state for backup if hiding
-        val summaryText = extractSummaryText(timeNode)
-        if (mode is TargetMode.HideAll && summaryText != null) {
-            val existing = backupManager.getExistingBackup()
-            if (existing == null) {
-                // Will save along with icons
+    /**
+     * Reads the actual current Time setting from Settings interface (not hardcoded!)
+     */
+    private suspend fun readActualCurrentTimeSetting(): String {
+        val root = rootInActiveWindow ?: return StatusBarBackupModel.TIME_SHOW_HOURS_MINUTES
+        val timeNode = findNodeMatching(root, compatibilityManager.timeMenuLabels)
+        if (timeNode != null) {
+            val summary = extractSummaryText(timeNode)
+            timeNode.recycle()
+            if (!summary.isNullOrBlank()) {
+                return summary.trim()
             }
         }
+        return StatusBarBackupModel.TIME_SHOW_HOURS_MINUTES
+    }
 
-        // Click to open Time dialog
+    private suspend fun handleTimeSetting(mode: TargetMode, detectedCurrentTime: String) {
+        val root = rootInActiveWindow ?: return
+        val timeNode = findNodeMatching(root, compatibilityManager.timeMenuLabels) ?: return
+
         clickNodeOrParent(timeNode)
         timeNode.recycle()
         delay(700)
 
-        // In the dialog, select target option
         val dialogRoot = rootInActiveWindow ?: return
         val targetLabels = if (mode is TargetMode.HideAll) {
             compatibilityManager.doNotShowLabels
         } else {
             val backup = backupManager.getExistingBackup()
-            listOf(backup?.originalTimeSetting ?: "Show hours and minutes")
+            listOf(backup?.originalTimeSetting ?: detectedCurrentTime)
         }
 
         val targetOptionNode = findNodeMatching(dialogRoot, targetLabels)
@@ -237,91 +404,91 @@ class StatusBarAccessibilityService : AccessibilityService() {
             Log.i(TAG, "Selected Time option: ${targetLabels.first()}")
         } else {
             Log.w(TAG, "Could not find Time dialog option for: $targetLabels")
+            // Dismiss dialog if not found
+            performGlobalAction(GLOBAL_ACTION_BACK)
         }
     }
 
-    private suspend fun handleNetworkSpeedSetting(mode: TargetMode) {
-        val root = rootInActiveWindow ?: return
-        val speedLabelNode = findNodeMatching(root, compatibilityManager.networkSpeedLabels) ?: return
+    private suspend fun handleNetworkSpeedSetting(mode: TargetMode): Boolean {
+        val root = rootInActiveWindow ?: return true
+        val speedLabelNode = findNodeMatching(root, compatibilityManager.networkSpeedLabels) ?: return true
 
-        val toggleNode = findAssociatedToggle(speedLabelNode)
+        var originalState = true
+        val toggleNode = findAssociatedCheckable(speedLabelNode)
         if (toggleNode != null) {
-            val isChecked = toggleNode.isChecked
+            originalState = toggleNode.isChecked
             val targetState = if (mode is TargetMode.HideAll) false else {
-                backupManager.getExistingBackup()?.originalRealTimeNetworkSpeed ?: true
+                backupManager.getExistingBackup()?.originalRealTimeNetworkSpeed ?: originalState
             }
 
-            if (isChecked != targetState) {
+            if (toggleNode.isChecked != targetState) {
                 clickNodeOrParent(toggleNode)
-                Log.i(TAG, "Toggled network speed from $isChecked to $targetState")
+                Log.i(TAG, "Toggled real-time network speed from ${toggleNode.isChecked} to $targetState")
+                delay(300)
             }
             toggleNode.recycle()
         }
         speedLabelNode.recycle()
+        return originalState
     }
 
-    private suspend fun handleStatusIcons(mode: TargetMode) {
-        val root = rootInActiveWindow ?: return
+    private suspend fun navigateIntoStatusIconsSubmenu(): Boolean {
+        val root = rootInActiveWindow ?: return false
         val iconsMenuNode = findNodeMatching(root, compatibilityManager.statusIconsSubmenuLabels)
         if (iconsMenuNode != null) {
-            clickNodeOrParent(iconsMenuNode)
+            val clicked = clickNodeOrParent(iconsMenuNode)
             iconsMenuNode.recycle()
-            delay(800)
-            
-            // We are inside the "Status icons" submenu
-            val iconsRoot = rootInActiveWindow ?: return
-            val discoveredIcons = scanAvailableIcons(iconsRoot)
-            
-            if (mode is TargetMode.HideAll) {
-                // Critical: Save baseline before changing if not already active!
-                val existing = backupManager.getExistingBackup()
-                if (existing == null) {
-                    backupManager.saveBackupIfNotActive(
-                        timeSetting = "Show hours and minutes",
-                        networkSpeed = true,
-                        icons = discoveredIcons
-                    )
-                }
+            return clicked
+        }
+        return false
+    }
 
-                // Turn OFF every icon
-                toggleAllIcons(iconsRoot, targetState = false, backup = null)
-            } else {
-                // Restore original state
-                val backup = backupManager.getExistingBackup()
-                val originalMap = backup?.originalStatusIcons ?: emptyMap()
-                restoreIconsToOriginalState(iconsRoot, originalMap)
+    /**
+     * OBJECTIVE 1: Comprehensive discovery of all available icon switch controls.
+     * Identifies every actual checkable switch control, associates with visible label,
+     * and scrolls through the entire list to catch items below the fold (e.g. VoLTE, VoNR, 5G).
+     */
+    private suspend fun discoverAllStatusIconRows(): Map<String, Boolean> {
+        val discoveredMap = linkedMapOf<String, Boolean>()
+        var previousDiscoveredCount = -1
+        var scrollAttempts = 0
+        val maxScrolls = 6
+
+        while (scrollAttempts < maxScrolls) {
+            val root = rootInActiveWindow ?: break
+            val currentVisible = scanCurrentScreenIconRows(root)
+            discoveredMap.putAll(currentVisible)
+
+            if (discoveredMap.size == previousDiscoveredCount) {
+                // No new items discovered after scroll -> end of list reached
+                break
             }
 
-            // Navigate back up to Status Bar menu
-            performGlobalAction(GLOBAL_ACTION_BACK)
+            previousDiscoveredCount = discoveredMap.size
+            val scrolled = scrollForward()
             delay(500)
-        } else {
-            Log.w(TAG, "No separate Status icons submenu found; scanning inline on status bar page.")
-            // Some OEM ROMs place icon toggles directly inside the Status bar page
-            val discoveredIcons = scanAvailableIcons(root)
-            if (mode is TargetMode.HideAll) {
-                backupManager.saveBackupIfNotActive("Show hours and minutes", true, discoveredIcons)
-                toggleAllIcons(root, targetState = false, backup = null)
-            } else {
-                val backup = backupManager.getExistingBackup()
-                restoreIconsToOriginalState(root, backup?.originalStatusIcons ?: emptyMap())
-            }
+            scrollAttempts++
+            if (!scrolled) break
         }
+
+        // Scroll back to top for modification pass
+        scrollToTop()
+        delay(400)
+        return discoveredMap
     }
 
-    private fun scanAvailableIcons(root: AccessibilityNodeInfo): Map<String, Boolean> {
-        val map = mutableMapOf<String, Boolean>()
+    private fun scanCurrentScreenIconRows(root: AccessibilityNodeInfo): Map<String, Boolean> {
+        val visibleMap = mutableMapOf<String, Boolean>()
         val queue = ArrayDeque<AccessibilityNodeInfo>()
         queue.add(root)
 
         while (queue.isNotEmpty()) {
             val node = queue.removeFirst()
-            val text = node.text?.toString() ?: node.contentDescription?.toString()
-            if (text != null && compatibilityManager.isTargetStatusIconLabel(text)) {
-                val toggle = findAssociatedToggle(node)
-                if (toggle != null) {
-                    map[text.trim()] = toggle.isChecked
-                    toggle.recycle()
+
+            if (node.isCheckable) {
+                val label = findLabelForCheckableNode(node)
+                if (label != null && !compatibilityManager.isDisallowedStatusIconRow(label)) {
+                    visibleMap[label] = node.isChecked
                 }
             }
 
@@ -329,84 +496,246 @@ class StatusBarAccessibilityService : AccessibilityService() {
                 node.getChild(i)?.let { queue.add(it) }
             }
         }
-        return map
+        return visibleMap
     }
 
-    private suspend fun toggleAllIcons(root: AccessibilityNodeInfo, targetState: Boolean, backup: Map<String, Boolean>?) {
+    /**
+     * Traverses the row container to associate a switch with its actual visible title.
+     */
+    private fun findLabelForCheckableNode(checkableNode: AccessibilityNodeInfo): String? {
+        var parent: AccessibilityNodeInfo? = checkableNode.parent
+        var depth = 0
+        while (parent != null && depth < 3) {
+            val labelCandidate = extractBestRowLabel(parent, checkableNode)
+            if (labelCandidate != null) {
+                return labelCandidate
+            }
+            parent = parent.parent
+            depth++
+        }
+        return null
+    }
+
+    private fun extractBestRowLabel(container: AccessibilityNodeInfo, checkableNode: AccessibilityNodeInfo): String? {
         val queue = ArrayDeque<AccessibilityNodeInfo>()
-        queue.add(root)
+        queue.add(container)
+        val textCandidates = mutableListOf<String>()
 
         while (queue.isNotEmpty()) {
             val node = queue.removeFirst()
-            val text = node.text?.toString() ?: node.contentDescription?.toString()
-            
-            // Strict safeguard: Never toggle battery percentage option!
-            if (text != null && compatibilityManager.isTargetStatusIconLabel(text)) {
-                val toggle = findAssociatedToggle(node)
-                if (toggle != null) {
-                    if (toggle.isChecked != targetState) {
-                        clickNodeOrParent(toggle)
-                        delay(250) // Allow UI animation to settle
+            if (node != checkableNode) {
+                val text = node.text?.toString()?.trim()
+                if (!text.isNullOrBlank() && !node.isCheckable) {
+                    textCandidates.add(text)
+                }
+            }
+            for (i in 0 until node.childCount) {
+                node.getChild(i)?.let { queue.add(it) }
+            }
+        }
+
+        // Return the first candidate that isn't a known summary or percentage
+        return textCandidates.firstOrNull { candidate ->
+            !compatibilityManager.isBatteryPercentageOption(candidate) &&
+                    !candidate.equals("ON", ignoreCase = true) &&
+                    !candidate.equals("OFF", ignoreCase = true)
+        }
+    }
+
+    /**
+     * Turns OFF every enabled icon. Leaves already-disabled icons untouched.
+     */
+    private suspend fun disableAllActiveStatusIcons(
+        discoveredMap: Map<String, Boolean>,
+        onProgress: (IconStats, String) -> Unit
+    ): IconStats {
+        var disabledCount = 0
+        val alreadyDisabledCount = discoveredMap.values.count { !it }
+        val keysToDisable = discoveredMap.filter { it.value }.keys.toMutableSet()
+        val totalToDisable = keysToDisable.size
+
+        var scrollPasses = 0
+        while (keysToDisable.isNotEmpty() && scrollPasses < 6) {
+            val root = rootInActiveWindow ?: break
+            val togglesOnScreen = findAllVisibleToggles(root)
+
+            for ((label, toggleNode) in togglesOnScreen) {
+                if (keysToDisable.contains(label)) {
+                    if (toggleNode.isChecked) {
+                        clickNodeOrParent(toggleNode)
+                        delay(280) // Let switch animation settle
+                        disabledCount++
+                        keysToDisable.remove(label)
+
+                        val remaining = keysToDisable.size
+                        val stats = IconStats(
+                            discovered = discoveredMap.size,
+                            disabled = disabledCount,
+                            alreadyDisabled = alreadyDisabledCount,
+                            restored = 0,
+                            remaining = remaining
+                        )
+                        onProgress(stats, label)
+                    } else {
+                        // Already off
+                        keysToDisable.remove(label)
                     }
-                    toggle.recycle()
                 }
             }
 
-            for (i in 0 until node.childCount) {
-                node.getChild(i)?.let { queue.add(it) }
-            }
+            if (keysToDisable.isEmpty()) break
+            val scrolled = scrollForward()
+            delay(400)
+            scrollPasses++
+            if (!scrolled) break
         }
+
+        return IconStats(
+            discovered = discoveredMap.size,
+            disabled = disabledCount,
+            alreadyDisabled = alreadyDisabledCount,
+            restored = 0,
+            remaining = keysToDisable.size
+        )
     }
 
-    private suspend fun restoreIconsToOriginalState(root: AccessibilityNodeInfo, originalMap: Map<String, Boolean>) {
+    /**
+     * Restores all status icons to their exact original baseline.
+     */
+    private suspend fun restoreAllStatusIconsToBaseline(
+        targetBaselineMap: Map<String, Boolean>,
+        onProgress: (IconStats, String) -> Unit
+    ): IconStats {
+        var restoredCount = 0
+        val pendingKeys = targetBaselineMap.keys.toMutableSet()
+        val totalToRestore = targetBaselineMap.size
+
+        var scrollPasses = 0
+        while (pendingKeys.isNotEmpty() && scrollPasses < 6) {
+            val root = rootInActiveWindow ?: break
+            val togglesOnScreen = findAllVisibleToggles(root)
+
+            for ((label, toggleNode) in togglesOnScreen) {
+                if (pendingKeys.contains(label)) {
+                    val desiredState = targetBaselineMap[label] ?: false
+                    if (toggleNode.isChecked != desiredState) {
+                        clickNodeOrParent(toggleNode)
+                        delay(280)
+                    }
+                    restoredCount++
+                    pendingKeys.remove(label)
+
+                    val stats = IconStats(
+                        discovered = targetBaselineMap.size,
+                        disabled = 0,
+                        alreadyDisabled = 0,
+                        restored = restoredCount,
+                        remaining = pendingKeys.size
+                    )
+                    onProgress(stats, label)
+                }
+            }
+
+            if (pendingKeys.isEmpty()) break
+            val scrolled = scrollForward()
+            delay(400)
+            scrollPasses++
+            if (!scrolled) break
+        }
+
+        return IconStats(
+            discovered = targetBaselineMap.size,
+            disabled = 0,
+            alreadyDisabled = 0,
+            restored = restoredCount,
+            remaining = pendingKeys.size
+        )
+    }
+
+    private fun findAllVisibleToggles(root: AccessibilityNodeInfo): List<Pair<String, AccessibilityNodeInfo>> {
+        val list = mutableListOf<Pair<String, AccessibilityNodeInfo>>()
         val queue = ArrayDeque<AccessibilityNodeInfo>()
         queue.add(root)
 
         while (queue.isNotEmpty()) {
             val node = queue.removeFirst()
-            val text = node.text?.toString() ?: node.contentDescription?.toString()
-
-            if (text != null && compatibilityManager.isTargetStatusIconLabel(text)) {
-                val iconKey = text.trim()
-                // Use saved original state, or default to false if not found
-                val targetState = originalMap[iconKey] ?: false
-                val toggle = findAssociatedToggle(node)
-                if (toggle != null) {
-                    if (toggle.isChecked != targetState) {
-                        clickNodeOrParent(toggle)
-                        delay(250)
-                    }
-                    toggle.recycle()
+            if (node.isCheckable) {
+                val label = findLabelForCheckableNode(node)
+                if (label != null && !compatibilityManager.isDisallowedStatusIconRow(label)) {
+                    list.add(label to node)
                 }
             }
-
             for (i in 0 until node.childCount) {
                 node.getChild(i)?.let { queue.add(it) }
             }
         }
+        return list
     }
 
-    private fun findAssociatedToggle(labelNode: AccessibilityNodeInfo): AccessibilityNodeInfo? {
-        // Look within siblings in the same row/container
-        val parent = labelNode.parent ?: return null
-        val count = parent.childCount
-        for (i in 0 until count) {
-            val child = parent.getChild(i) ?: continue
-            if (child.isCheckable) {
+    /**
+     * OBJECTIVE 2: Inspects manufacturer settings for wired headphone / earphone visibility controls.
+     * If unexposed by OEM/SystemUI, safely reports as System-managed without disrupting audio.
+     */
+    private data class HeadphoneCheckResult(val isSupported: Boolean, val message: String)
+
+    private suspend fun inspectAndConfigureHeadphoneSetting(mode: TargetMode): HeadphoneCheckResult {
+        val root = rootInActiveWindow ?: return HeadphoneCheckResult(
+            isSupported = false,
+            message = "System-managed wired headphone icon – no supported visibility control found."
+        )
+
+        // Check if any visible or scrollable item matches headphone candidates
+        val headphoneNode = findNodeMatching(root, compatibilityManager.wiredHeadphoneCandidateLabels)
+        if (headphoneNode != null) {
+            val toggle = findAssociatedCheckable(headphoneNode)
+            if (toggle != null) {
+                val isHide = mode is TargetMode.HideAll
+                if (isHide && toggle.isChecked) {
+                    clickNodeOrParent(toggle)
+                    delay(300)
+                } else if (!isHide && !toggle.isChecked) {
+                    clickNodeOrParent(toggle)
+                    delay(300)
+                }
+                toggle.recycle()
+                headphoneNode.recycle()
+                return HeadphoneCheckResult(true, "Configured wired headphone icon visibility.")
+            }
+            headphoneNode.recycle()
+        }
+
+        // Standard Android behavior: 3.5mm headphone icon is handled natively by SystemUI AudioManager
+        Log.i(TAG, "No user-accessible wired headphone visibility setting exposed in OEM Settings.")
+        return HeadphoneCheckResult(
+            isSupported = false,
+            message = "System-managed wired headphone icon – no supported visibility control found."
+        )
+    }
+
+    private fun findAssociatedCheckable(labelNode: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        var parent: AccessibilityNodeInfo? = labelNode.parent
+        var depth = 0
+        while (parent != null && depth < 3) {
+            val checkable = findCheckableInChildren(parent, labelNode)
+            if (checkable != null) return checkable
+            parent = parent.parent
+            depth++
+        }
+        return null
+    }
+
+    private fun findCheckableInChildren(container: AccessibilityNodeInfo, exclude: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        val queue = ArrayDeque<AccessibilityNodeInfo>()
+        queue.add(container)
+        while (queue.isNotEmpty()) {
+            val child = queue.removeFirst()
+            if (child != exclude && child.isCheckable) {
                 return child
             }
-            // Check deeper in container
-            for (j in 0 until child.childCount) {
-                val grandChild = child.getChild(j) ?: continue
-                if (grandChild.isCheckable) {
-                    child.recycle()
-                    return grandChild
-                }
-                grandChild.recycle()
+            for (i in 0 until child.childCount) {
+                child.getChild(i)?.let { queue.add(it) }
             }
-            child.recycle()
         }
-        parent.recycle()
         return null
     }
 
@@ -414,8 +743,8 @@ class StatusBarAccessibilityService : AccessibilityService() {
         val parent = node.parent ?: return null
         for (i in 0 until parent.childCount) {
             val child = parent.getChild(i) ?: continue
-            val childText = child.text?.toString()
-            if (childText != null && childText != node.text?.toString()) {
+            val childText = child.text?.toString()?.trim()
+            if (!childText.isNullOrBlank() && childText != node.text?.toString()?.trim()) {
                 parent.recycle()
                 return childText
             }
@@ -456,7 +785,7 @@ class StatusBarAccessibilityService : AccessibilityService() {
             current = current.parent
         }
 
-        // Fallback: Dispatch gesture tap at node bounds
+        // Gesture fallback based on screen coordinates
         val bounds = Rect()
         node.getBoundsInScreen(bounds)
         if (!bounds.isEmpty) {
@@ -467,14 +796,21 @@ class StatusBarAccessibilityService : AccessibilityService() {
 
     private fun dispatchTapGesture(x: Float, y: Float): Boolean {
         val path = Path().apply { moveTo(x, y) }
-        val stroke = GestureDescription.StrokeDescription(path, 0, 50)
+        val stroke = GestureDescription.StrokeDescription(path, 0, 45)
         val gesture = GestureDescription.Builder().addStroke(stroke).build()
         return dispatchGesture(gesture, null, null)
     }
 
-    private fun scrollDown(): Boolean {
+    private fun scrollForward(): Boolean {
         val root = rootInActiveWindow ?: return false
         val scrolled = root.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)
+        root.recycle()
+        return scrolled
+    }
+
+    private fun scrollToTop(): Boolean {
+        val root = rootInActiveWindow ?: return false
+        val scrolled = root.performAction(AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD)
         root.recycle()
         return scrolled
     }
@@ -490,17 +826,17 @@ class StatusBarAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun updateProgress(step: AutomationStep, message: String, index: Int, total: Int) {
-        _progressState.value = AutomationProgress(
-            currentStep = step,
-            message = message,
-            stepIndex = index,
-            totalSteps = total
-        )
-    }
-
     private fun handleAutomationFailure(reason: String) {
-        updateProgress(AutomationStep.FAILED, reason, 0, 7)
+        val progress = AutomationProgress(
+            currentStep = AutomationStep.FAILED,
+            operationTitle = "Automation Error",
+            currentOperation = reason,
+            percentage = 100,
+            errorReason = reason
+        )
+        _progressState.value = progress
+        overlayManager.updateProgress(progress)
+
         serviceScope.launch {
             dataStoreRepository.recordOperation("FAILED", reason)
         }

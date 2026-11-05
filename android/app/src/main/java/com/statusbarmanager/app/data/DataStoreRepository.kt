@@ -24,6 +24,9 @@ class DataStoreRepository(private val context: Context) {
         val LAST_OPERATION_MESSAGE = stringPreferencesKey("last_operation_message")
         val LAST_OPERATION_TIMESTAMP = longPreferencesKey("last_operation_timestamp")
         val DEVICE_PROFILE = stringPreferencesKey("device_profile")
+        val HAS_HEADPHONE_CONTROL = booleanPreferencesKey("has_headphone_control")
+        val ORIGINAL_HEADPHONE_SETTING = booleanPreferencesKey("original_headphone_setting")
+        val IS_PARTIAL_RESULT = booleanPreferencesKey("is_partial_result")
     }
 
     val isHideActiveFlow: Flow<Boolean> = context.dataStore.data
@@ -56,6 +59,9 @@ class DataStoreRepository(private val context: Context) {
             val iconsMap = deserializeIcons(iconsSerialized)
             val timestamp = preferences[PreferencesKeys.BACKUP_TIMESTAMP] ?: System.currentTimeMillis()
             val isHideActive = preferences[PreferencesKeys.IS_HIDE_ACTIVE] ?: false
+            val hasHeadphone = preferences[PreferencesKeys.HAS_HEADPHONE_CONTROL] ?: false
+            val headphoneSetting = preferences[PreferencesKeys.ORIGINAL_HEADPHONE_SETTING]
+            val isPartial = preferences[PreferencesKeys.IS_PARTIAL_RESULT] ?: false
 
             StatusBarBackupModel(
                 timestamp = timestamp,
@@ -65,7 +71,10 @@ class DataStoreRepository(private val context: Context) {
                 deviceManufacturer = android.os.Build.MANUFACTURER,
                 deviceModel = android.os.Build.MODEL,
                 androidVersion = android.os.Build.VERSION.SDK_INT,
-                isHideActive = isHideActive
+                isHideActive = isHideActive,
+                hasHeadphoneControl = hasHeadphone,
+                originalHeadphoneSetting = headphoneSetting,
+                isPartial = isPartial
             )
         }
 
@@ -91,12 +100,18 @@ class DataStoreRepository(private val context: Context) {
             preferences[PreferencesKeys.ORIGINAL_ICONS_SERIALIZED] = serializeIcons(backup.originalStatusIcons)
             preferences[PreferencesKeys.IS_HIDE_ACTIVE] = true
             preferences[PreferencesKeys.DEVICE_PROFILE] = "${backup.deviceManufacturer} ${backup.deviceModel} (API ${backup.androidVersion})"
+            preferences[PreferencesKeys.HAS_HEADPHONE_CONTROL] = backup.hasHeadphoneControl
+            if (backup.originalHeadphoneSetting != null) {
+                preferences[PreferencesKeys.ORIGINAL_HEADPHONE_SETTING] = backup.originalHeadphoneSetting
+            }
+            preferences[PreferencesKeys.IS_PARTIAL_RESULT] = backup.isPartial
         }
     }
 
-    suspend fun setHideActive(active: Boolean) {
+    suspend fun setHideActive(active: Boolean, isPartial: Boolean = false) {
         context.dataStore.edit { preferences ->
             preferences[PreferencesKeys.IS_HIDE_ACTIVE] = active
+            preferences[PreferencesKeys.IS_PARTIAL_RESULT] = isPartial
         }
     }
 
@@ -104,10 +119,13 @@ class DataStoreRepository(private val context: Context) {
         context.dataStore.edit { preferences ->
             preferences[PreferencesKeys.HAS_VALID_BACKUP] = false
             preferences[PreferencesKeys.IS_HIDE_ACTIVE] = false
+            preferences[PreferencesKeys.IS_PARTIAL_RESULT] = false
             preferences.remove(PreferencesKeys.ORIGINAL_TIME_SETTING)
             preferences.remove(PreferencesKeys.ORIGINAL_NETWORK_SPEED)
             preferences.remove(PreferencesKeys.ORIGINAL_ICONS_SERIALIZED)
             preferences.remove(PreferencesKeys.BACKUP_TIMESTAMP)
+            preferences.remove(PreferencesKeys.HAS_HEADPHONE_CONTROL)
+            preferences.remove(PreferencesKeys.ORIGINAL_HEADPHONE_SETTING)
         }
     }
 
