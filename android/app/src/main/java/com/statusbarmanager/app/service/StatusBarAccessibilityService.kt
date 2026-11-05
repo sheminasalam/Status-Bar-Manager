@@ -167,13 +167,14 @@ class StatusBarAccessibilityService : AccessibilityService() {
         delay(400)
 
         // ----------------------------------------------------
+        if (isHideMode || isRestoreMode) {
         // PHASE 1: STATUS BAR AUTOMATION (if applicable)
         // ----------------------------------------------------
         var isPartial = false
         var headphoneStatusText = "Not checked"
         var stats = IconStats()
 
-        if (isHideMode || (isRestoreMode && mode !is TargetMode.ForceStopOnly)) {
+        if (isHideMode || isRestoreMode) {
             // Step 1: Open Settings
             publish(AutomationStep.OPENING_SETTINGS, "Opening phone Settings...", 12, 1)
             launchSettings()
@@ -299,6 +300,8 @@ class StatusBarAccessibilityService : AccessibilityService() {
         }
 
         // ----------------------------------------------------
+        }
+
         // PHASE 2: APPLICATION FORCE STOP AUTOMATION (if applicable)
         // ----------------------------------------------------
         if (isForceStopMode) {
@@ -480,7 +483,7 @@ class StatusBarAccessibilityService : AccessibilityService() {
         delay(700)
 
         val dialogRoot = rootInActiveWindow ?: return
-        val targetLabels = if (mode is TargetMode.HideAll) {
+        val targetLabels = if (mode is TargetMode.HideAll || mode is TargetMode.BothEngage) {
             compatibilityManager.doNotShowLabels
         } else {
             val backup = backupManager.getExistingBackup()
@@ -489,8 +492,10 @@ class StatusBarAccessibilityService : AccessibilityService() {
 
         val targetOptionNode = findNodeMatching(dialogRoot, targetLabels)
         if (targetOptionNode != null) {
-            clickNodeOrParent(targetOptionNode)
+            val selected = clickNodeOrParent(targetOptionNode)
             targetOptionNode.recycle()
+            if (!selected) throw IllegalStateException("Could not select the requested Time display option.")
+            delay(350)
             Log.i(TAG, "Selected Time option: ${targetLabels.first()}")
         } else {
             Log.w(TAG, "Could not find Time dialog option for: $targetLabels")
@@ -507,14 +512,15 @@ class StatusBarAccessibilityService : AccessibilityService() {
         val toggleNode = findAssociatedCheckable(speedLabelNode)
         if (toggleNode != null) {
             originalState = toggleNode.isChecked
-            val targetState = if (mode is TargetMode.HideAll) false else {
+            val targetState = if (mode is TargetMode.HideAll || mode is TargetMode.BothEngage) false else {
                 backupManager.getExistingBackup()?.originalRealTimeNetworkSpeed ?: originalState
             }
 
             if (toggleNode.isChecked != targetState) {
-                clickNodeOrParent(toggleNode)
-                Log.i(TAG, "Toggled real-time network speed from ${toggleNode.isChecked} to $targetState")
-                delay(300)
+                val changed = clickNodeOrParent(toggleNode)
+                if (!changed) throw IllegalStateException("Could not change the real-time network speed switch.")
+                delay(350)
+                Log.i(TAG, "Requested real-time network speed state: $targetState")
             }
             toggleNode.recycle()
         }

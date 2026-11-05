@@ -34,6 +34,7 @@ class StatusBarWidgetProvider : AppWidgetProvider() {
 
     companion object {
         const val ACTION_WIDGET_TOGGLE = "com.statusbarmanager.app.widget.ACTION_WIDGET_TOGGLE"
+        const val ACTION_WIDGET_FORCE_STOP = "com.statusbarmanager.app.widget.ACTION_WIDGET_FORCE_STOP"
 
         fun updateAllWidgets(context: Context) {
             val appWidgetManager = AppWidgetManager.getInstance(context)
@@ -67,46 +68,56 @@ class StatusBarWidgetProvider : AppWidgetProvider() {
 
     override fun onReceive(context: Context, intent: Intent) {
         super.onReceive(context, intent)
-        if (intent.action == ACTION_WIDGET_TOGGLE) {
-            val repo = DataStoreRepository(context)
-            val backupManager = SettingsBackupManager(repo)
-            val automationManager = SettingsAutomationManager(context)
-            val coordinator = OperationCoordinator(context, repo, backupManager)
+        if (intent.action != ACTION_WIDGET_TOGGLE && intent.action != ACTION_WIDGET_FORCE_STOP) return
 
-            if (!automationManager.isAccessibilityPermissionGranted()) {
-                // Open app to prompt for accessibility
-                val openIntent = Intent(context, MainActivity::class.java).apply {
-                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-                    putExtra("prompt_accessibility", true)
+        val repo = DataStoreRepository(context)
+        val backupManager = SettingsBackupManager(repo)
+        val automationManager = SettingsAutomationManager(context)
+        val coordinator = OperationCoordinator(context, repo, backupManager)
+
+        fun openMain(prompt: String) {
+            val openIntent = Intent(context, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                putExtra(prompt, true)
+            }
+            context.startActivity(openIntent)
+        }
+
+        if (!automationManager.isAccessibilityPermissionGranted()) {
+            openMain("prompt_accessibility")
+            return
+        }
+        if (!automationManager.canDrawOverlays()) {
+            openMain("prompt_overlay")
+            return
+        }
+
+        CoroutineScope(Dispatchers.IO).launch {
+            val appManager = com.statusbarmanager.app.automation.ApplicationManager(context)
+            if (intent.action == ACTION_WIDGET_FORCE_STOP) {
+                if (!appManager.hasUsageAccess()) {
+                    openMain("prompt_usage_access")
+                    return@launch
                 }
-                context.startActivity(openIntent)
-                return
+                coordinator.forceStopAppsOnly()
+                updateAllWidgets(context)
+                return@launch
             }
 
-            CoroutineScope(Dispatchers.IO).launch {
-                val isHideActive = repo.isHideActiveFlow.first()
-                val engageMode = repo.engageModeFlow.first()
-
-                if (isHideActive) {
-                    // Disengage restores status bar settings; does not restart apps and needs no confirmation
-                    coordinator.disengage()
-                    updateAllWidgets(context)
-                } else {
-                    // Engaging: check if mode requires force-stop confirmation
-                    if (engageMode == EngageMode.FORCE_STOP_APPS_ONLY || engageMode == EngageMode.BOTH) {
-                        // Open app to present the safety confirmation dialog to the user
-                        val confirmIntent = Intent(context, MainActivity::class.java).apply {
-                            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-                            putExtra("confirm_force_stop", true)
-                        }
-                        context.startActivity(confirmIntent)
-                    } else {
-                        // Status Bar Only mode: safe to engage directly
-                        coordinator.engage()
-                        updateAllWidgets(context)
-                    }
-                }
+            val isHideActive = repo.isHideActiveFlow.first()
+            if (isHideActive) {
+                coordinator.disengage()
+                updateAllWidgets(context)
+                return@launch
             }
+
+            val engageMode = repo.engageModeFlow.first()
+            if (engageMode != EngageMode.STATUS_BAR_ONLY && !appManager.hasUsageAccess()) {
+                openMain("prompt_usage_access")
+                return@launch
+            }
+            coordinator.engage()
+            updateAllWidgets(context)
         }
     }
 

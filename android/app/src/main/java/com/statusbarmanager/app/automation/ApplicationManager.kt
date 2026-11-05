@@ -25,7 +25,7 @@ class ApplicationManager(private val context: Context) {
 
     companion object {
         private const val TAG = "ApplicationManager"
-        const val RECENT_APP_WINDOW_MINUTES = 15L
+        const val RECENT_APP_WINDOW_MINUTES = 5L
     }
 
     private val packageManager: PackageManager = context.packageManager
@@ -150,27 +150,62 @@ class ApplicationManager(private val context: Context) {
 
         val now = System.currentTimeMillis()
         val cutoff = now - recentWindowMinutes.coerceAtLeast(1L) * 60_000L
-        val recentPackages = try {
+        // Only look up packages actually used in the last few minutes.
+        val recentStats = try {
             val usageManager = context.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
             usageManager.queryUsageStats(UsageStatsManager.INTERVAL_DAILY, cutoff, now)
                 .orEmpty()
                 .filter { it.lastTimeUsed in cutoff..now }
-                .map { it.packageName }
-                .toSet()
+                .associateBy { it.packageName }
         } catch (e: Exception) {
             Log.e(TAG, "Unable to read recent app usage: ${e.message}", e)
-            emptySet()
+            emptyMap()
         }
+        if (recentStats.isEmpty()) return emptyList()
 
-        if (recentPackages.isEmpty()) return emptyList()
+        val myPackage = context.packageName
+        val launcherPackage = getDefaultLauncherPackage()
+        val imePackage = getActiveInputMethodPackage()
+        val dialerPackage = getDefaultDialerPackage()
+        val smsPackage = getDefaultSmsPackage()
 
-        return getInstalledApplications(userWhitelist).filter { app ->
-            recentPackages.contains(app.packageName) &&
-                !app.isSystemApp &&
-                !app.isProtectedRole &&
-                !app.isWhitelisted &&
-                !app.isStopped &&
-                app.packageName != context.packageName
+        return recentStats.entries.sortedByDescending { it.value.lastTimeUsed }.mapNotNull { (pkg, _) ->
+            if (pkg == myPackage || userWhitelist.contains(pkg)) return@mapNotNull null
+            val info = try {
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                    packageManager.getApplicationInfo(
+                        pkg,
+                        PackageManager.ApplicationInfoFlags.of(PackageManager.GET_META_DATA.toLong())
+                    )
+                } else {
+                    @Suppress("DEPRECATION")
+                    packageManager.getApplicationInfo(pkg, PackageManager.GET_META_DATA)
+                }
+            } catch (_: PackageManager.NameNotFoundException) {
+                return@mapNotNull null
+            } catch (e: Exception) {
+                Log.w(TAG, "Unable to inspect recent package $pkg: ${e.message}")
+                return@mapNotNull null
+            }
+
+            val isSystem = (info.flags and ApplicationInfo.FLAG_SYSTEM != 0) ||
+                (info.flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP != 0)
+            val isStopped = (info.flags and ApplicationInfo.FLAG_STOPPED) != 0
+            val protectedRole = pkg == launcherPackage || pkg == imePackage ||
+                pkg == dialerPackage || pkg == smsPackage ||
+                pkg.startsWith("com.android.systemui") ||
+                pkg.startsWith("com.google.android.inputmethod")
+            if (isSystem || isStopped || protectedRole) return@mapNotNull null
+
+            val label = try { packageManager.getApplicationLabel(info).toString() } catch (_: Exception) { pkg }
+            AppItem(
+                packageName = pkg,
+                appName = label,
+                isSystemApp = false,
+                isWhitelisted = false,
+                isProtectedRole = false,
+                isStopped = false
+            )
         }
     }
 

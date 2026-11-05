@@ -77,11 +77,11 @@ class AppForceStopAccessibilityController(
             return ForceStopResult.FAILED_OPENING_SETTINGS
         }
 
-        delay(950)
+        delay(600)
 
         // Step 2 & 3: Find Force Stop button in active window
         val root = service.rootInActiveWindow ?: run {
-            delay(500)
+            delay(250)
             service.rootInActiveWindow
         }
 
@@ -112,7 +112,7 @@ class AppForceStopAccessibilityController(
             return ForceStopResult.UNAVAILABLE_OR_DISABLED
         }
 
-        delay(600)
+        delay(350)
 
         // Step 6: Detect system confirmation dialog and confirm
         val dialogRoot = service.rootInActiveWindow
@@ -121,7 +121,7 @@ class AppForceStopAccessibilityController(
             if (confirmNode != null) {
                 clickNodeOrParent(confirmNode)
                 confirmNode.recycle()
-                delay(600)
+                delay(350)
             }
         }
 

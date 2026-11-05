@@ -14,6 +14,8 @@ import kotlinx.coroutines.launch
 class MainActivity : ComponentActivity() {
 
     private var usageAccessGranted by mutableStateOf(false)
+    private var overlayAccessGranted by mutableStateOf(false)
+    private var accessibilityAccessGranted by mutableStateOf(false)
 
     private lateinit var dataStoreRepository: DataStoreRepository
     private lateinit var backupManager: SettingsBackupManager
@@ -31,7 +33,11 @@ class MainActivity : ComponentActivity() {
         coordinator = OperationCoordinator(applicationContext, dataStoreRepository, backupManager)
         applicationManager = ApplicationManager(applicationContext)
         usageAccessGranted = applicationManager.hasUsageAccess()
-        if (intent.getBooleanExtra("prompt_usage_access", false) && !usageAccessGranted) {
+        overlayAccessGranted = automationManager.canDrawOverlays()
+        accessibilityAccessGranted = automationManager.isAccessibilityPermissionGranted()
+        if (intent.getBooleanExtra("prompt_overlay", false) && !overlayAccessGranted) {
+            automationManager.openOverlaySettings()
+        } else if (intent.getBooleanExtra("prompt_usage_access", false) && !usageAccessGranted) {
             automationManager.openUsageAccessSettings()
         }
 
@@ -48,12 +54,8 @@ class MainActivity : ComponentActivity() {
                     initial = Triple("IDLE", "Ready to configure", 0L)
                 )
 
-                var isAccessibilityGranted by remember {
-                    mutableStateOf(automationManager.isAccessibilityPermissionGranted())
-                }
-                var isOverlayGranted by remember {
-                    mutableStateOf(automationManager.canDrawOverlays())
-                }
+                val isAccessibilityGranted = accessibilityAccessGranted
+                val isOverlayGranted = overlayAccessGranted
 
                 var showOnboardingDialog by remember {
                     mutableStateOf(intent.getBooleanExtra("prompt_accessibility", false))
@@ -64,8 +66,7 @@ class MainActivity : ComponentActivity() {
                 val automationProgress by automationManager.progressState.collectAsState()
 
                 DisposableEffect(Unit) {
-                    isAccessibilityGranted = automationManager.isAccessibilityPermissionGranted()
-                    isOverlayGranted = automationManager.canDrawOverlays()
+                    // Permission states refresh from onResume after returning from Android Settings.
                     if (intent.getBooleanExtra("prompt_accessibility", false)) {
                         showOnboardingDialog = true
                     }
@@ -117,6 +118,10 @@ class MainActivity : ComponentActivity() {
                             }
 
                             if (shouldEngage) {
+                                if (!automationManager.canDrawOverlays()) {
+                                    automationManager.openOverlaySettings()
+                                    return@MainScreen
+                                }
                                 if (engageMode != EngageMode.STATUS_BAR_ONLY && !applicationManager.hasUsageAccess()) {
                                     automationManager.openUsageAccessSettings()
                                     return@MainScreen
@@ -129,6 +134,10 @@ class MainActivity : ComponentActivity() {
                         onRestoreOriginal = {
                             if (!isAccessibilityGranted) {
                                 showOnboardingDialog = true
+                                return@MainScreen
+                            }
+                            if (!automationManager.canDrawOverlays()) {
+                                automationManager.openOverlaySettings()
                                 return@MainScreen
                             }
                             coroutineScope.launch { coordinator.disengage() }
@@ -175,6 +184,8 @@ class MainActivity : ComponentActivity() {
         super.onResume()
         if (::applicationManager.isInitialized) {
             usageAccessGranted = applicationManager.hasUsageAccess()
+            overlayAccessGranted = automationManager.canDrawOverlays()
+            accessibilityAccessGranted = automationManager.isAccessibilityPermissionGranted()
         }
     }
 }

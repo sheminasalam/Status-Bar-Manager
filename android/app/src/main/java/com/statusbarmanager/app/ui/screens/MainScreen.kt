@@ -605,7 +605,7 @@ fun UsageAccessPermissionCard(onRequestPermission: () -> Unit) {
             )
             Spacer(modifier = Modifier.height(4.dp))
             Text(
-                text = "SysHush uses the last 15 minutes of app-usage information to limit force-stop attempts to recently used apps instead of every installed app.",
+                text = "SysHush checks the last 5 minutes of app-usage information and skips apps Android already marks as stopped. Android does not expose a reliable list of every background process to ordinary apps.",
                 style = MaterialTheme.typography.bodySmall.copy(color = TextSecondary)
             )
             Spacer(modifier = Modifier.height(10.dp))
