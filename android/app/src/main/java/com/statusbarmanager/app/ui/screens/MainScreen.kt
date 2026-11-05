@@ -43,7 +43,9 @@ fun MainScreen(
     onRequestAccessibilityPermission: () -> Unit,
     onRequestOverlayPermission: () -> Unit,
     onOpenSystemSettings: () -> Unit,
-    onViewBackupDetails: () -> Unit
+    onViewBackupDetails: () -> Unit,
+    onToggleStatusBarOnly: () -> Unit,
+    onStopAppsOnly: () -> Unit
 ) {
     val scrollState = rememberScrollState()
     val isRunning = automationProgress.currentStep != AutomationStep.IDLE &&
@@ -115,6 +117,15 @@ fun MainScreen(
                 engageMode = engageMode,
                 activeEngagementMode = activeEngagementMode,
                 onToggle = onToggleMasterSwitch
+            )
+
+            IndividualActionsCard(
+                isStatusBarActive = isHideActive &&
+                    (activeEngagementMode ?: engageMode) != EngageMode.FORCE_STOP_APPS_ONLY,
+                isRunning = isRunning,
+                isAccessibilityGranted = isAccessibilityGranted,
+                onToggleStatusBar = onToggleStatusBarOnly,
+                onStopApps = onStopAppsOnly
             )
 
             // System Status Overview Grid
@@ -247,6 +258,73 @@ fun MasterSwitchCard(
                         uncheckedThumbColor = TextMuted,
                         uncheckedTrackColor = DarkSurfaceElevated
                     )
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun IndividualActionsCard(
+    isStatusBarActive: Boolean,
+    isRunning: Boolean,
+    isAccessibilityGranted: Boolean,
+    onToggleStatusBar: () -> Unit,
+    onStopApps: () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(containerColor = DarkSurface),
+        border = androidx.compose.foundation.BorderStroke(1.dp, DarkBorder)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                text = "Individual Actions",
+                style = MaterialTheme.typography.titleMedium.copy(
+                    fontWeight = FontWeight.Bold,
+                    color = TextPrimary
+                )
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = "Run either action on its own. The Hush Button above can still run both together.",
+                style = MaterialTheme.typography.bodySmall.copy(color = TextSecondary)
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                FilledTonalButton(
+                    onClick = onToggleStatusBar,
+                    enabled = !isRunning && isAccessibilityGranted,
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(12.dp),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 12.dp)
+                ) {
+                    Icon(
+                        imageVector = if (isStatusBarActive) Icons.Default.Restore else Icons.Default.VisibilityOff,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(if (isStatusBarActive) "Restore Status Bar" else "Hide Status Bar", maxLines = 2)
+                }
+                FilledTonalButton(
+                    onClick = onStopApps,
+                    enabled = !isRunning && isAccessibilityGranted,
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(12.dp),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 12.dp)
+                ) {
+                    Icon(Icons.Default.Stop, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Stop Running Apps", maxLines = 2)
+                }
+            }
+            if (!isAccessibilityGranted) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "Enable the SysHush Accessibility Service to use these actions.",
+                    style = MaterialTheme.typography.labelSmall.copy(color = WarningAmber)
                 )
             }
         }
