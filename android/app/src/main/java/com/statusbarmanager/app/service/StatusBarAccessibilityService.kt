@@ -1020,6 +1020,11 @@ class StatusBarAccessibilityService : AccessibilityService() {
         serviceScope.launch {
             dataStoreRepository.recordOperation("FAILED", reason)
         }
+
+        // Failure can occur while Android Settings is the foreground task.
+        // Bring SysHush back underneath the diagnostic overlay so dismissing
+        // the overlay never drops the user into an abandoned Settings screen.
+        returnToApp()
     }
 
     private fun cancelAutomation(reason: String) {
