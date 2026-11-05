@@ -5,6 +5,7 @@
     <!-- Overlay permission for Live Floating Progress Panel while Settings is automated -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS" tools:ignore="ProtectedPermissions" />
     
     <!--
         Broad package visibility is required by the core app-management feature:
@@ -39,12 +40,37 @@
 
         <!-- Home Screen Widget Provider (Objective 4) -->
         <receiver
+            android:name=".widget.HushButtonIconWidgetProvider"
+            android:exported="true"
+            android:label="@string/widget_hush_button_name">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/syshush_hush_button_widget_info" />
+        </receiver>
+
+        <receiver
+            android:name=".widget.StopAppsWidgetProvider"
+            android:exported="true"
+            android:label="@string/widget_stop_apps_name">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/syshush_stop_apps_widget_info" />
+        </receiver>
+
+        <receiver
             android:name=".widget.StatusBarWidgetProvider"
             android:exported="true"
             android:label="@string/widget_name">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
                 <action android:name="com.statusbarmanager.app.widget.ACTION_WIDGET_TOGGLE" />
+                <action android:name="com.statusbarmanager.app.widget.ACTION_WIDGET_FORCE_STOP" />
             </intent-filter>
             <meta-data
                 android:name="android.appwidget.provider"

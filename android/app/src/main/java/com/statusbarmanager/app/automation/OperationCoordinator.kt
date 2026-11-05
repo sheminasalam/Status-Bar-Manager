@@ -58,6 +58,19 @@ class OperationCoordinator(
         return true
     }
 
+    /** Runs the dedicated app-only widget action without changing the configured Hush Button mode. */
+    suspend fun forceStopAppsOnly(): Boolean {
+        val service = StatusBarAccessibilityService.instance
+        if (service == null || !ApplicationManager(context).hasUsageAccess()) {
+            Log.e(TAG, "Cannot stop recent apps: service or Usage Access is unavailable")
+            return false
+        }
+        dataStoreRepository.setActiveEngagementMode(EngageMode.FORCE_STOP_APPS_ONLY)
+        service.startAutomation(TargetMode.ForceStopOnly)
+        StatusBarWidgetProvider.updateAllWidgets(context)
+        return true
+    }
+
     /**
      * Executes the Disengage action according to the previously engaged mode.
      * Restores original status bar configuration only if status bar was actually hidden.

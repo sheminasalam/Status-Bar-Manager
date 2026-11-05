@@ -13,6 +13,8 @@ import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
 
+    private var usageAccessGranted by mutableStateOf(false)
+
     private lateinit var dataStoreRepository: DataStoreRepository
     private lateinit var backupManager: SettingsBackupManager
     private lateinit var automationManager: SettingsAutomationManager
@@ -28,6 +30,10 @@ class MainActivity : ComponentActivity() {
         automationManager = SettingsAutomationManager(applicationContext)
         coordinator = OperationCoordinator(applicationContext, dataStoreRepository, backupManager)
         applicationManager = ApplicationManager(applicationContext)
+        usageAccessGranted = applicationManager.hasUsageAccess()
+        if (intent.getBooleanExtra("prompt_usage_access", false) && !usageAccessGranted) {
+            automationManager.openUsageAccessSettings()
+        }
 
         setContent {
             StatusBarManagerTheme {
@@ -54,18 +60,12 @@ class MainActivity : ComponentActivity() {
                 }
                 var showBackupDialog by remember { mutableStateOf(false) }
                 var showWhitelistScreen by remember { mutableStateOf(false) }
-                var showForceStopConfirmDialog by remember {
-                    mutableStateOf(intent.getBooleanExtra("confirm_force_stop", false))
-                }
 
                 val automationProgress by automationManager.progressState.collectAsState()
 
                 DisposableEffect(Unit) {
                     isAccessibilityGranted = automationManager.isAccessibilityPermissionGranted()
                     isOverlayGranted = automationManager.canDrawOverlays()
-                    if (intent.getBooleanExtra("confirm_force_stop", false)) {
-                        showForceStopConfirmDialog = true
-                    }
                     if (intent.getBooleanExtra("prompt_accessibility", false)) {
                         showOnboardingDialog = true
                     }
@@ -101,6 +101,7 @@ class MainActivity : ComponentActivity() {
                         automationProgress = automationProgress,
                         compatibilityManager = compatibilityManager,
                         engageMode = engageMode,
+                        isUsageAccessGranted = usageAccessGranted,
                         onSelectEngageMode = { mode ->
                             coroutineScope.launch {
                                 dataStoreRepository.setEngageMode(mode)
@@ -116,12 +117,11 @@ class MainActivity : ComponentActivity() {
                             }
 
                             if (shouldEngage) {
-                                // If mode includes force-stopping apps, show safety confirmation dialog first
-                                if (engageMode == EngageMode.FORCE_STOP_APPS_ONLY || engageMode == EngageMode.BOTH) {
-                                    showForceStopConfirmDialog = true
-                                } else {
-                                    coroutineScope.launch { coordinator.engage() }
+                                if (engageMode != EngageMode.STATUS_BAR_ONLY && !applicationManager.hasUsageAccess()) {
+                                    automationManager.openUsageAccessSettings()
+                                    return@MainScreen
                                 }
+                                coroutineScope.launch { coordinator.engage() }
                             } else {
                                 coroutineScope.launch { coordinator.disengage() }
                             }
@@ -139,29 +139,15 @@ class MainActivity : ComponentActivity() {
                         onRequestOverlayPermission = {
                             automationManager.openOverlaySettings()
                         },
+                        onRequestUsageAccess = {
+                            automationManager.openUsageAccessSettings()
+                        },
                         onOpenSystemSettings = {
                             automationManager.openSystemSettings()
                         },
                         onViewBackupDetails = {
                             showBackupDialog = true
                         }
-                    )
-                }
-
-                if (showForceStopConfirmDialog) {
-                    val eligible = remember(whitelist) { applicationManager.getEligibleAppsForForceStop(whitelist).size }
-                    val allApps = remember(whitelist) { applicationManager.getInstalledApplications(whitelist) }
-                    val protectedCount = allApps.count { it.isSystemApp || it.isProtectedRole }
-
-                    ForceStopConfirmationDialog(
-                        eligibleCount = eligible,
-                        whitelistedCount = whitelist.size,
-                        protectedCount = protectedCount,
-                        onConfirm = {
-                            showForceStopConfirmDialog = false
-                            coroutineScope.launch { coordinator.engage() }
-                        },
-                        onDismiss = { showForceStopConfirmDialog = false }
                     )
                 }
 
@@ -187,5 +173,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        if (::applicationManager.isInitialized) {
+            usageAccessGranted = applicationManager.hasUsageAccess()
+        }
     }
 }

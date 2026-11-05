@@ -31,6 +31,7 @@ fun MainScreen(
     backupModel: StatusBarBackupModel?,
     isAccessibilityGranted: Boolean,
     isOverlayGranted: Boolean,
+    isUsageAccessGranted: Boolean,
     lastOperation: Triple<String, String, Long>,
     automationProgress: AutomationProgress,
     compatibilityManager: DeviceCompatibilityManager,
@@ -41,6 +42,7 @@ fun MainScreen(
     onRestoreOriginal: () -> Unit,
     onRequestAccessibilityPermission: () -> Unit,
     onRequestOverlayPermission: () -> Unit,
+    onRequestUsageAccess: () -> Unit,
     onOpenSystemSettings: () -> Unit,
     onViewBackupDetails: () -> Unit
 ) {
@@ -105,6 +107,10 @@ fun MainScreen(
                 AccessibilityBanner(onRequestPermission = onRequestAccessibilityPermission)
             }
 
+            if (engageMode != EngageMode.STATUS_BAR_ONLY && !isUsageAccessGranted) {
+                UsageAccessPermissionCard(onRequestPermission = onRequestUsageAccess)
+            }
+
             // Prominent Master Switch Card
             MasterSwitchCard(
                 isHideActive = isHideActive,
@@ -113,14 +119,6 @@ fun MainScreen(
                 isPartial = backupModel?.isPartial ?: false,
                 onToggle = onToggleMasterSwitch
             )
-
-            // Live Comprehensive Automation Progress Panel (Objective 3)
-            if (isRunning || automationProgress.currentStep != AutomationStep.IDLE) {
-                LiveAutomationProgressPanel(
-                    progress = automationProgress,
-                    isRunning = isRunning
-                )
-            }
 
             // System Status Overview Grid
             StatusOverviewCard(
@@ -206,7 +204,7 @@ fun MasterSwitchCard(
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "Hide Status Bar Information",
+                        text = "Hush Button",
                         style = MaterialTheme.typography.titleLarge.copy(
                             fontWeight = FontWeight.Bold,
                             color = TextPrimary
@@ -505,7 +503,7 @@ fun StatusOverviewCard(
 
                 // Floating Overlay Pill
                 StatusPill(
-                    label = "Floating Overlay",
+                    label = "Progress Window",
                     value = if (isOverlayGranted) "Enabled" to SuccessGreen else "Disabled" to TextMuted,
                     modifier = Modifier.weight(1f)
                 )
@@ -589,6 +587,40 @@ fun StatusPill(
 }
 
 @Composable
+fun UsageAccessPermissionCard(onRequestPermission: () -> Unit) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(1.dp, WarningAmber.copy(alpha = 0.45f), RoundedCornerShape(16.dp)),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = DarkSurfaceElevated)
+    ) {
+        Column(modifier = Modifier.padding(14.dp)) {
+            Text(
+                text = "Usage Access Required",
+                style = MaterialTheme.typography.titleSmall.copy(
+                    fontWeight = FontWeight.Bold,
+                    color = TextPrimary
+                )
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = "SysHush uses the last 15 minutes of app-usage information to limit force-stop attempts to recently used apps instead of every installed app.",
+                style = MaterialTheme.typography.bodySmall.copy(color = TextSecondary)
+            )
+            Spacer(modifier = Modifier.height(10.dp))
+            Button(
+                onClick = onRequestPermission,
+                shape = RoundedCornerShape(10.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = BluePrimary)
+            ) {
+                Text("Grant Usage Access", color = Color.White)
+            }
+        }
+    }
+}
+
+@Composable
 fun OverlayPermissionCard(onRequestPermission: () -> Unit) {
     Card(
         modifier = Modifier
@@ -612,14 +644,14 @@ fun OverlayPermissionCard(onRequestPermission: () -> Unit) {
             Spacer(modifier = Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = "Floating Live Progress Panel",
+                    text = "Full-screen Progress Window",
                     style = MaterialTheme.typography.titleSmall.copy(
                         fontWeight = FontWeight.Bold,
                         color = TextPrimary
                     )
                 )
                 Text(
-                    text = "Displays live progress on top of Settings while automation runs.",
+                    text = "Covers the Settings screens while SysHush runs and shows only overall progress.",
                     style = MaterialTheme.typography.bodySmall.copy(color = TextSecondary, fontSize = 11.sp)
                 )
             }
@@ -893,7 +925,7 @@ fun EngageModeCard(
                     }
                     Spacer(modifier = Modifier.width(10.dp))
                     Text(
-                        text = "Engage Button Behaviour",
+                        text = "Hush Button Behaviour",
                         style = MaterialTheme.typography.titleMedium.copy(
                             fontWeight = FontWeight.Bold,
                             color = TextPrimary
@@ -904,7 +936,7 @@ fun EngageModeCard(
 
             Spacer(modifier = Modifier.height(6.dp))
             Text(
-                text = "Choose what actions execute when the master Engage switch or Home-Screen Widget is activated.",
+                text = "Choose what the Hush Button controls when pressed in the app or from its widget.",
                 style = MaterialTheme.typography.bodySmall.copy(color = TextSecondary)
             )
 

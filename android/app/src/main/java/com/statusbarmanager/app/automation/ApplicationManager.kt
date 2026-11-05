@@ -1,11 +1,13 @@
 package com.statusbarmanager.app.automation
 
+import android.app.AppOpsManager
+import android.app.usage.UsageStatsManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.graphics.drawable.Drawable
-import android.os.Build
+import android.os.Process
 import android.provider.Settings
 import android.util.Log
 
@@ -15,48 +17,55 @@ data class AppItem(
     val isSystemApp: Boolean,
     val isWhitelisted: Boolean,
     val isProtectedRole: Boolean,
-    val protectionReason: String? = null
+    val protectionReason: String? = null,
+    val isStopped: Boolean = false
 )
 
 class ApplicationManager(private val context: Context) {
 
     companion object {
         private const val TAG = "ApplicationManager"
+        const val RECENT_APP_WINDOW_MINUTES = 15L
     }
 
     private val packageManager: PackageManager = context.packageManager
 
-    /**
-     * Resolves default home launcher package
-     */
-    private fun getDefaultLauncherPackage(): String? {
-        val intent = Intent(Intent.ACTION_MAIN).apply {
-            addCategory(Intent.CATEGORY_HOME)
+    fun hasUsageAccess(): Boolean {
+        return try {
+            val appOps = context.getSystemService(Context.APP_OPS_SERVICE) as AppOpsManager
+            appOps.checkOpNoThrow(
+                AppOpsManager.OPSTR_GET_USAGE_STATS,
+                Process.myUid(),
+                context.packageName
+            ) == AppOpsManager.MODE_ALLOWED
+        } catch (e: Exception) {
+            Log.w(TAG, "Unable to check Usage Access: ${e.message}")
+            false
         }
+    }
+
+    private fun getDefaultLauncherPackage(): String? {
+        val intent = Intent(Intent.ACTION_MAIN).apply { addCategory(Intent.CATEGORY_HOME) }
         val resolveInfo = packageManager.resolveActivity(intent, PackageManager.MATCH_DEFAULT_ONLY)
         return resolveInfo?.activityInfo?.packageName
     }
 
-    /**
-     * Resolves active input method package (keyboard)
-     */
     private fun getActiveInputMethodPackage(): String? {
-        val defaultIme = Settings.Secure.getString(context.contentResolver, Settings.Secure.DEFAULT_INPUT_METHOD)
+        val defaultIme = Settings.Secure.getString(
+            context.contentResolver,
+            Settings.Secure.DEFAULT_INPUT_METHOD
+        )
         return defaultIme?.split("/")?.firstOrNull()
     }
 
-    /**
-     * Resolves default dialer/phone app
-     */
     private fun getDefaultDialerPackage(): String? {
-        val intent = Intent(Intent.ACTION_DIAL)
-        val resolveInfo = packageManager.resolveActivity(intent, PackageManager.MATCH_DEFAULT_ONLY)
+        val resolveInfo = packageManager.resolveActivity(
+            Intent(Intent.ACTION_DIAL),
+            PackageManager.MATCH_DEFAULT_ONLY
+        )
         return resolveInfo?.activityInfo?.packageName
     }
 
-    /**
-     * Resolves default SMS app
-     */
     private fun getDefaultSmsPackage(): String? {
         val intent = Intent(Intent.ACTION_SENDTO).apply {
             data = android.net.Uri.parse("smsto:")
@@ -65,14 +74,14 @@ class ApplicationManager(private val context: Context) {
         return resolveInfo?.activityInfo?.packageName
     }
 
-    /**
-     * Discovers all installed applications with automatic system and critical role classification.
-     */
     fun getInstalledApplications(userWhitelist: Set<String>): List<AppItem> {
         val installed = try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                packageManager.getInstalledApplications(PackageManager.ApplicationInfoFlags.of(PackageManager.GET_META_DATA.toLong()))
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                packageManager.getInstalledApplications(
+                    PackageManager.ApplicationInfoFlags.of(PackageManager.GET_META_DATA.toLong())
+                )
             } else {
+                @Suppress("DEPRECATION")
                 packageManager.getInstalledApplications(PackageManager.GET_META_DATA)
             }
         } catch (e: Exception) {
@@ -86,10 +95,11 @@ class ApplicationManager(private val context: Context) {
         val dialerPackage = getDefaultDialerPackage()
         val smsPackage = getDefaultSmsPackage()
 
-        return installed.mapNotNull { appInfo ->
+        return installed.map { appInfo ->
             val pkg = appInfo.packageName
             val isSystem = (appInfo.flags and ApplicationInfo.FLAG_SYSTEM != 0) ||
-                    (appInfo.flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP != 0)
+                (appInfo.flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP != 0)
+            val isStopped = (appInfo.flags and ApplicationInfo.FLAG_STOPPED) != 0
 
             val name = try {
                 packageManager.getApplicationLabel(appInfo).toString()
@@ -97,61 +107,70 @@ class ApplicationManager(private val context: Context) {
                 pkg
             }
 
-            // Classification of critical protection
-            var isProtectedRole = false
-            var protectionReason: String? = null
-
-            when {
-                pkg == myPackage -> {
-                    isProtectedRole = true
-                    protectionReason = "Self (SysHush)"
-                }
-                pkg == launcherPackage -> {
-                    isProtectedRole = true
-                    protectionReason = "Active Home Launcher"
-                }
-                pkg == imePackage -> {
-                    isProtectedRole = true
-                    protectionReason = "Active Input Method (Keyboard)"
-                }
-                pkg == dialerPackage -> {
-                    isProtectedRole = true
-                    protectionReason = "Default Phone / Dialer"
-                }
-                pkg == smsPackage -> {
-                    isProtectedRole = true
-                    protectionReason = "Default Messaging Handler"
-                }
-                pkg.startsWith("com.android.systemui") || pkg.startsWith("com.google.android.inputmethod") -> {
-                    isProtectedRole = true
-                    protectionReason = "Essential System Component"
-                }
+            val protectionReason = when {
+                pkg == myPackage -> "Self (SysHush)"
+                pkg == launcherPackage -> "Active Home Launcher"
+                pkg == imePackage -> "Active Input Method (Keyboard)"
+                pkg == dialerPackage -> "Default Phone / Dialer"
+                pkg == smsPackage -> "Default Messaging Handler"
+                pkg.startsWith("com.android.systemui") ||
+                    pkg.startsWith("com.google.android.inputmethod") ->
+                    "Essential System Component"
+                else -> null
             }
-
-            val isWhitelisted = userWhitelist.contains(pkg)
 
             AppItem(
                 packageName = pkg,
                 appName = name,
                 isSystemApp = isSystem,
-                isWhitelisted = isWhitelisted,
-                isProtectedRole = isProtectedRole,
-                protectionReason = protectionReason
+                isWhitelisted = userWhitelist.contains(pkg),
+                isProtectedRole = protectionReason != null,
+                protectionReason = protectionReason,
+                isStopped = isStopped
             )
         }.sortedWith(compareBy({ it.isSystemApp }, { it.isProtectedRole }, { it.appName.lowercase() }))
     }
 
     /**
-     * Filters for apps that are eligible for Force Stop automation.
-     * Strictly excludes system apps, self, protected roles, and user whitelisted apps.
+     * Finds recently used user apps instead of iterating over every installed app.
+     *
+     * Android does not expose a reliable third-party list of all live background
+     * processes on modern Android. Usage Access supplies a bounded recent-use
+     * candidate list. FLAG_STOPPED additionally excludes packages Android already
+     * considers stopped (including apps that have been force-stopped).
      */
-    fun getEligibleAppsForForceStop(userWhitelist: Set<String>): List<AppItem> {
-        val all = getInstalledApplications(userWhitelist)
-        return all.filter { app ->
-            !app.isSystemApp &&
-                    !app.isProtectedRole &&
-                    !app.isWhitelisted &&
-                    app.packageName != context.packageName
+    fun getEligibleAppsForForceStop(
+        userWhitelist: Set<String>,
+        recentWindowMinutes: Long = RECENT_APP_WINDOW_MINUTES
+    ): List<AppItem> {
+        if (!hasUsageAccess()) {
+            Log.w(TAG, "Usage Access is required to select recently used applications.")
+            return emptyList()
+        }
+
+        val now = System.currentTimeMillis()
+        val cutoff = now - recentWindowMinutes.coerceAtLeast(1L) * 60_000L
+        val recentPackages = try {
+            val usageManager = context.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
+            usageManager.queryUsageStats(UsageStatsManager.INTERVAL_DAILY, cutoff, now)
+                .orEmpty()
+                .filter { it.lastTimeUsed in cutoff..now }
+                .map { it.packageName }
+                .toSet()
+        } catch (e: Exception) {
+            Log.e(TAG, "Unable to read recent app usage: ${e.message}", e)
+            emptySet()
+        }
+
+        if (recentPackages.isEmpty()) return emptyList()
+
+        return getInstalledApplications(userWhitelist).filter { app ->
+            recentPackages.contains(app.packageName) &&
+                !app.isSystemApp &&
+                !app.isProtectedRole &&
+                !app.isWhitelisted &&
+                !app.isStopped &&
+                app.packageName != context.packageName
         }
     }
 
