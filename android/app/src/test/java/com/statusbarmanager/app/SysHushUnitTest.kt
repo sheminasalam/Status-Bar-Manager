@@ -1,9 +1,12 @@
 package com.statusbarmanager.app
 
+import android.app.ActivityManager
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import com.statusbarmanager.app.automation.EngageMode
+import com.statusbarmanager.app.automation.isActiveProcessImportance
 
 class SysHushUnitTest {
 
@@ -32,4 +35,20 @@ class SysHushUnitTest {
         assertTrue(forceStopChecklist.isNotEmpty())
         assertTrue(forceStopChecklist.any { it.id == "force_stop" })
     }
+    @Test
+    fun testOnlyNonCachedProcessesAreEligibleForForceStop() {
+        assertTrue(
+            isActiveProcessImportance(ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND)
+        )
+        assertTrue(
+            isActiveProcessImportance(ActivityManager.RunningAppProcessInfo.IMPORTANCE_SERVICE)
+        )
+        assertFalse(
+            isActiveProcessImportance(ActivityManager.RunningAppProcessInfo.IMPORTANCE_CACHED)
+        )
+        assertFalse(
+            isActiveProcessImportance(ActivityManager.RunningAppProcessInfo.IMPORTANCE_GONE)
+        )
+    }
+
 }

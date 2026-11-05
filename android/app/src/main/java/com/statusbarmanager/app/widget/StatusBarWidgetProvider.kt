@@ -93,12 +93,7 @@ class StatusBarWidgetProvider : AppWidgetProvider() {
         }
 
         CoroutineScope(Dispatchers.IO).launch {
-            val appManager = com.statusbarmanager.app.automation.ApplicationManager(context)
             if (intent.action == ACTION_WIDGET_FORCE_STOP) {
-                if (!appManager.hasUsageAccess()) {
-                    openMain("prompt_usage_access")
-                    return@launch
-                }
                 coordinator.forceStopAppsOnly()
                 updateAllWidgets(context)
                 return@launch
@@ -112,10 +107,6 @@ class StatusBarWidgetProvider : AppWidgetProvider() {
             }
 
             val engageMode = repo.engageModeFlow.first()
-            if (engageMode != EngageMode.STATUS_BAR_ONLY && !appManager.hasUsageAccess()) {
-                openMain("prompt_usage_access")
-                return@launch
-            }
             coordinator.engage()
             updateAllWidgets(context)
         }

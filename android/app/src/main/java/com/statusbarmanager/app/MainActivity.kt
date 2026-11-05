@@ -13,7 +13,6 @@ import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
 
-    private var usageAccessGranted by mutableStateOf(false)
     private var overlayAccessGranted by mutableStateOf(false)
     private var accessibilityAccessGranted by mutableStateOf(false)
 
@@ -32,13 +31,10 @@ class MainActivity : ComponentActivity() {
         automationManager = SettingsAutomationManager(applicationContext)
         coordinator = OperationCoordinator(applicationContext, dataStoreRepository, backupManager)
         applicationManager = ApplicationManager(applicationContext)
-        usageAccessGranted = applicationManager.hasUsageAccess()
         overlayAccessGranted = automationManager.canDrawOverlays()
         accessibilityAccessGranted = automationManager.isAccessibilityPermissionGranted()
         if (intent.getBooleanExtra("prompt_overlay", false) && !overlayAccessGranted) {
             automationManager.openOverlaySettings()
-        } else if (intent.getBooleanExtra("prompt_usage_access", false) && !usageAccessGranted) {
-            automationManager.openUsageAccessSettings()
         }
 
         setContent {
@@ -104,7 +100,6 @@ class MainActivity : ComponentActivity() {
                         compatibilityManager = compatibilityManager,
                         engageMode = engageMode,
                         activeEngagementMode = activeEngagementMode,
-                        isUsageAccessGranted = usageAccessGranted,
                         onSelectEngageMode = { mode ->
                             coroutineScope.launch {
                                 dataStoreRepository.setEngageMode(mode)
@@ -122,10 +117,6 @@ class MainActivity : ComponentActivity() {
                             if (shouldEngage) {
                                 if (!automationManager.canDrawOverlays()) {
                                     automationManager.openOverlaySettings()
-                                    return@MainScreen
-                                }
-                                if (engageMode != EngageMode.STATUS_BAR_ONLY && !applicationManager.hasUsageAccess()) {
-                                    automationManager.openUsageAccessSettings()
                                     return@MainScreen
                                 }
                                 coroutineScope.launch { coordinator.engage() }
@@ -149,9 +140,6 @@ class MainActivity : ComponentActivity() {
                         },
                         onRequestOverlayPermission = {
                             automationManager.openOverlaySettings()
-                        },
-                        onRequestUsageAccess = {
-                            automationManager.openUsageAccessSettings()
                         },
                         onOpenSystemSettings = {
                             automationManager.openSystemSettings()
@@ -185,7 +173,6 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         if (::applicationManager.isInitialized) {
-            usageAccessGranted = applicationManager.hasUsageAccess()
             overlayAccessGranted = automationManager.canDrawOverlays()
             accessibilityAccessGranted = automationManager.isAccessibilityPermissionGranted()
         }

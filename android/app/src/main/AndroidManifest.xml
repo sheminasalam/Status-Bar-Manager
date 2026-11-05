@@ -5,7 +5,6 @@
     <!-- Overlay permission for Live Floating Progress Panel while Settings is automated -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS" tools:ignore="ProtectedPermissions" />
     
     <!--
         Broad package visibility is required by the core app-management feature:

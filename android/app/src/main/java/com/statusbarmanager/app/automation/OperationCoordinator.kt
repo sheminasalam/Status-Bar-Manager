@@ -48,10 +48,6 @@ class OperationCoordinator(
             return false
         }
         val mode = dataStoreRepository.getEngageMode()
-        if (mode != EngageMode.STATUS_BAR_ONLY && !ApplicationManager(context).hasUsageAccess()) {
-            Log.e(TAG, "Cannot engage app actions: Usage Access is required")
-            return false
-        }
         Log.i(TAG, "Initiating Engage with mode: $mode")
         // Persist the actual mode used for active engagement
         dataStoreRepository.setActiveEngagementMode(mode)
@@ -70,8 +66,8 @@ class OperationCoordinator(
     /** Runs the dedicated app-only widget action without changing the configured Hush Button mode. */
     suspend fun forceStopAppsOnly(): Boolean {
         val service = StatusBarAccessibilityService.instance
-        if (service == null || !Settings.canDrawOverlays(context) || !ApplicationManager(context).hasUsageAccess()) {
-            Log.e(TAG, "Cannot stop recent apps: service or Usage Access is unavailable")
+        if (service == null || !Settings.canDrawOverlays(context)) {
+            Log.e(TAG, "Cannot stop running apps: service or overlay permission is unavailable")
             return false
         }
         // A dedicated Stop Apps widget action must not overwrite an already-active

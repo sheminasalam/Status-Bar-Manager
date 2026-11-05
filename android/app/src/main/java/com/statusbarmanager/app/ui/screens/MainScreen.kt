@@ -31,7 +31,6 @@ fun MainScreen(
     backupModel: StatusBarBackupModel?,
     isAccessibilityGranted: Boolean,
     isOverlayGranted: Boolean,
-    isUsageAccessGranted: Boolean,
     activeEngagementMode: EngageMode?,
     lastOperation: Triple<String, String, Long>,
     automationProgress: AutomationProgress,
@@ -43,7 +42,6 @@ fun MainScreen(
     onRestoreOriginal: () -> Unit,
     onRequestAccessibilityPermission: () -> Unit,
     onRequestOverlayPermission: () -> Unit,
-    onRequestUsageAccess: () -> Unit,
     onOpenSystemSettings: () -> Unit,
     onViewBackupDetails: () -> Unit
 ) {
@@ -106,10 +104,6 @@ fun MainScreen(
             // Permission Alert Banner if Accessibility missing
             if (!isAccessibilityGranted) {
                 AccessibilityBanner(onRequestPermission = onRequestAccessibilityPermission)
-            }
-
-            if (engageMode != EngageMode.STATUS_BAR_ONLY && !isUsageAccessGranted) {
-                UsageAccessPermissionCard(onRequestPermission = onRequestUsageAccess)
             }
 
             // Prominent Master Switch Card
@@ -219,21 +213,21 @@ fun MasterSwitchCard(
                     Text(
                         text = when {
                             isPartial && (activeEngagementMode ?: engageMode) == EngageMode.FORCE_STOP_APPS_ONLY ->
-                                "Some recently used apps could not be stopped. Protected and already-stopped apps were skipped."
+                                "Some running apps could not be stopped. Protected and already-stopped apps were skipped."
                             isPartial && (activeEngagementMode ?: engageMode) == EngageMode.BOTH ->
-                                "Status bar changes were applied, but some recent apps could not be stopped."
+                                "Status bar changes were applied, but some running apps could not be stopped."
                             isPartial ->
                                 "Some status bar items could not be changed (wired headphone indicators may be system-managed)."
                             isHideActive && activeEngagementMode == EngageMode.FORCE_STOP_APPS_ONLY ->
-                                "Eligible recently used apps have been stopped. Reopen an app normally when you need it again."
+                                "Eligible running apps have been stopped. Reopen an app normally when you need it again."
                             isHideActive && activeEngagementMode == EngageMode.BOTH ->
-                                "Clock, network speed and available status icons are hidden; eligible recently used apps were also stopped."
+                                "Clock, network speed and available status icons are hidden; eligible running apps were also stopped."
                             isHideActive ->
                                 "Clock, real-time network speed and available status icons are currently hidden."
                             (activeEngagementMode ?: engageMode) == EngageMode.FORCE_STOP_APPS_ONLY ->
-                                "Stops eligible user apps used in the last 5 minutes. Android does not expose an exact live-process list."
+                                "Stops eligible user apps that still have a non-cached process. Apps that are no longer running are skipped."
                             (activeEngagementMode ?: engageMode) == EngageMode.BOTH ->
-                                "Hides the clock and network speed, and stops eligible recently used apps."
+                                "Hides the clock and network speed, and stops eligible running apps."
                             else ->
                                 "Hides the clock, network speed and available status-bar icons."
                         },
@@ -607,40 +601,6 @@ fun StatusPill(
 }
 
 @Composable
-fun UsageAccessPermissionCard(onRequestPermission: () -> Unit) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .border(1.dp, WarningAmber.copy(alpha = 0.45f), RoundedCornerShape(16.dp)),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = DarkSurfaceElevated)
-    ) {
-        Column(modifier = Modifier.padding(14.dp)) {
-            Text(
-                text = "Usage Access Required",
-                style = MaterialTheme.typography.titleSmall.copy(
-                    fontWeight = FontWeight.Bold,
-                    color = TextPrimary
-                )
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = "SysHush checks the last 5 minutes of app-usage information and skips apps Android already marks as stopped. Android does not expose a reliable list of every background process to ordinary apps.",
-                style = MaterialTheme.typography.bodySmall.copy(color = TextSecondary)
-            )
-            Spacer(modifier = Modifier.height(10.dp))
-            Button(
-                onClick = onRequestPermission,
-                shape = RoundedCornerShape(10.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = BluePrimary)
-            ) {
-                Text("Grant Usage Access", color = Color.White)
-            }
-        }
-    }
-}
-
-@Composable
 fun OverlayPermissionCard(onRequestPermission: () -> Unit) {
     Card(
         modifier = Modifier
@@ -979,7 +939,7 @@ fun EngageModeCard(
 
                 EngageModeRadioItem(
                     title = "Force Stop Apps Only",
-                    description = "Force-stops non-system apps via Settings. Status bar remains untouched.",
+                    description = "Force-stops currently running non-system apps via Settings. Status bar remains untouched.",
                     isSelected = currentMode == EngageMode.FORCE_STOP_APPS_ONLY,
                     onClick = { onModeSelected(EngageMode.FORCE_STOP_APPS_ONLY) }
                 )

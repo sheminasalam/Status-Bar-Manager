@@ -71,14 +71,6 @@ class SettingsAutomationManager(private val context: Context) {
         context.startActivity(intent)
     }
 
-    /** Opens the special Usage Access permission screen for recently-used-app filtering. */
-    fun openUsageAccessSettings() {
-        val intent = Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK
-        }
-        context.startActivity(intent)
-    }
-
     /**
      * Starts the hide or restore automation
      */
