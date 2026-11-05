@@ -1,13 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <!-- Overlay permission for Live Floating Progress Panel while Settings is automated -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     
-    <!-- Package visibility permission for App Force Stop feature (Objective 1) -->
-    <!-- Used exclusively locally to discover installed non-system apps to allow user whitelisting and automated force stop. -->
-    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
+    <!--
+        Broad package visibility is required by the core app-management feature:
+        the whitelist and force-stop candidate screens enumerate installed apps locally,
+        then exclude system apps, this app, and critical system roles before any action.
+        Keep this permission narrowly scoped to that user-facing functionality.
+    -->
+    <uses-permission
+        android:name="android.permission.QUERY_ALL_PACKAGES"
+        tools:ignore="QueryAllPackagesPermission" />
 
     <application
         android:allowBackup="true"
