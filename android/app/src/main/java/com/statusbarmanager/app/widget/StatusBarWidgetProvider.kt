@@ -35,6 +35,7 @@ class StatusBarWidgetProvider : AppWidgetProvider() {
     companion object {
         const val ACTION_WIDGET_TOGGLE = "com.statusbarmanager.app.widget.ACTION_WIDGET_TOGGLE"
         const val ACTION_WIDGET_FORCE_STOP = "com.statusbarmanager.app.widget.ACTION_WIDGET_FORCE_STOP"
+        const val ACTION_WIDGET_STATUS_BAR_ONLY = "com.statusbarmanager.app.widget.ACTION_WIDGET_STATUS_BAR_ONLY"
 
         fun updateAllWidgets(context: Context) {
             val appWidgetManager = AppWidgetManager.getInstance(context)
@@ -68,7 +69,10 @@ class StatusBarWidgetProvider : AppWidgetProvider() {
 
     override fun onReceive(context: Context, intent: Intent) {
         super.onReceive(context, intent)
-        if (intent.action != ACTION_WIDGET_TOGGLE && intent.action != ACTION_WIDGET_FORCE_STOP) return
+        if (intent.action != ACTION_WIDGET_TOGGLE &&
+            intent.action != ACTION_WIDGET_FORCE_STOP &&
+            intent.action != ACTION_WIDGET_STATUS_BAR_ONLY
+        ) return
 
         val repo = DataStoreRepository(context)
         val backupManager = SettingsBackupManager(repo)
@@ -93,6 +97,12 @@ class StatusBarWidgetProvider : AppWidgetProvider() {
         }
 
         CoroutineScope(Dispatchers.IO).launch {
+            if (intent.action == ACTION_WIDGET_STATUS_BAR_ONLY) {
+                coordinator.toggleStatusBarOnly()
+                updateAllWidgets(context)
+                return@launch
+            }
+
             if (intent.action == ACTION_WIDGET_FORCE_STOP) {
                 coordinator.forceStopAppsOnly()
                 updateAllWidgets(context)
