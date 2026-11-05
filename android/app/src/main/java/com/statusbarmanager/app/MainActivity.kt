@@ -49,6 +49,7 @@ class MainActivity : ComponentActivity() {
                 val hasBackup by dataStoreRepository.hasBackupFlow.collectAsState(initial = false)
                 val backupModel by dataStoreRepository.backupModelFlow.collectAsState(initial = null)
                 val engageMode by dataStoreRepository.engageModeFlow.collectAsState(initial = EngageMode.BOTH)
+                val activeEngagementMode by dataStoreRepository.activeEngagementModeFlow.collectAsState(initial = null)
                 val whitelist by dataStoreRepository.whitelistFlow.collectAsState(initial = emptySet())
                 val lastOperation by dataStoreRepository.lastOperationFlow.collectAsState(
                     initial = Triple("IDLE", "Ready to configure", 0L)
@@ -102,6 +103,7 @@ class MainActivity : ComponentActivity() {
                         automationProgress = automationProgress,
                         compatibilityManager = compatibilityManager,
                         engageMode = engageMode,
+                        activeEngagementMode = activeEngagementMode,
                         isUsageAccessGranted = usageAccessGranted,
                         onSelectEngageMode = { mode ->
                             coroutineScope.launch {

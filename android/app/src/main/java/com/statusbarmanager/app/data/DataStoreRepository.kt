@@ -46,6 +46,14 @@ class DataStoreRepository(private val context: Context) {
             EngageMode.fromString(modeStr)
         }
 
+    val activeEngagementModeFlow: Flow<EngageMode?> = context.dataStore.data
+        .catch { exception ->
+            if (exception is IOException) emit(emptyPreferences()) else throw exception
+        }
+        .map { preferences ->
+            preferences[PreferencesKeys.ACTIVE_ENGAGEMENT_MODE]?.let(EngageMode::fromString)
+        }
+
     val whitelistFlow: Flow<Set<String>> = context.dataStore.data
         .catch { exception ->
             if (exception is IOException) emit(emptyPreferences()) else throw exception

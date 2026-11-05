@@ -74,7 +74,12 @@ class OperationCoordinator(
             Log.e(TAG, "Cannot stop recent apps: service or Usage Access is unavailable")
             return false
         }
-        dataStoreRepository.setActiveEngagementMode(EngageMode.FORCE_STOP_APPS_ONLY)
+        // A dedicated Stop Apps widget action must not overwrite an already-active
+        // status-bar mode. Otherwise the later Hush Button disengage would forget
+        // that it needs to restore the user's saved status-bar configuration.
+        if (dataStoreRepository.getActiveEngagementMode() == null) {
+            dataStoreRepository.setActiveEngagementMode(EngageMode.FORCE_STOP_APPS_ONLY)
+        }
         service.startAutomation(TargetMode.ForceStopOnly)
         StatusBarWidgetProvider.updateAllWidgets(context)
         return true

@@ -32,6 +32,7 @@ fun MainScreen(
     isAccessibilityGranted: Boolean,
     isOverlayGranted: Boolean,
     isUsageAccessGranted: Boolean,
+    activeEngagementMode: EngageMode?,
     lastOperation: Triple<String, String, Long>,
     automationProgress: AutomationProgress,
     compatibilityManager: DeviceCompatibilityManager,
@@ -117,6 +118,8 @@ fun MainScreen(
                 isRunning = isRunning,
                 isAccessibilityGranted = isAccessibilityGranted,
                 isPartial = backupModel?.isPartial ?: false,
+                engageMode = engageMode,
+                activeEngagementMode = activeEngagementMode,
                 onToggle = onToggleMasterSwitch
             )
 
@@ -175,6 +178,8 @@ fun MasterSwitchCard(
     isRunning: Boolean,
     isAccessibilityGranted: Boolean,
     isPartial: Boolean,
+    engageMode: EngageMode,
+    activeEngagementMode: EngageMode?,
     onToggle: (Boolean) -> Unit
 ) {
     Card(
@@ -213,9 +218,24 @@ fun MasterSwitchCard(
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
                         text = when {
-                            isPartial -> "Clock, network speed & available icons hidden (Wired headphone icon is system-managed)."
-                            isHideActive -> "Clock, real-time network speed, and all status icons are currently hidden."
-                            else -> "Disables clock, network speed, VoLTE, SIM, Wi-Fi, battery and all available system status icons."
+                            isPartial && (activeEngagementMode ?: engageMode) == EngageMode.FORCE_STOP_APPS_ONLY ->
+                                "Some recently used apps could not be stopped. Protected and already-stopped apps were skipped."
+                            isPartial && (activeEngagementMode ?: engageMode) == EngageMode.BOTH ->
+                                "Status bar changes were applied, but some recent apps could not be stopped."
+                            isPartial ->
+                                "Some status bar items could not be changed (wired headphone indicators may be system-managed)."
+                            isHideActive && activeEngagementMode == EngageMode.FORCE_STOP_APPS_ONLY ->
+                                "Eligible recently used apps have been stopped. Reopen an app normally when you need it again."
+                            isHideActive && activeEngagementMode == EngageMode.BOTH ->
+                                "Clock, network speed and available status icons are hidden; eligible recently used apps were also stopped."
+                            isHideActive ->
+                                "Clock, real-time network speed and available status icons are currently hidden."
+                            (activeEngagementMode ?: engageMode) == EngageMode.FORCE_STOP_APPS_ONLY ->
+                                "Stops eligible user apps used in the last 5 minutes. Android does not expose an exact live-process list."
+                            (activeEngagementMode ?: engageMode) == EngageMode.BOTH ->
+                                "Hides the clock and network speed, and stops eligible recently used apps."
+                            else ->
+                                "Hides the clock, network speed and available status-bar icons."
                         },
                         style = MaterialTheme.typography.bodyMedium.copy(color = TextSecondary)
                     )
