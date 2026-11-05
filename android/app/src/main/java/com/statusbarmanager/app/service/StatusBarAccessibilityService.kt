@@ -471,14 +471,18 @@ class StatusBarAccessibilityService : AccessibilityService() {
     }
 
     private suspend fun handleTimeSetting(mode: TargetMode, detectedCurrentTime: String) {
-        val root = rootInActiveWindow ?: return
-        val timeNode = findNodeMatching(root, compatibilityManager.timeMenuLabels) ?: return
+        val root = rootInActiveWindow
+            ?: throw IllegalStateException("Could not read the current Status bar settings screen.")
+        val timeNode = findNodeMatching(root, compatibilityManager.timeMenuLabels)
+            ?: throw IllegalStateException("Could not find the Time display setting. The clock was not changed.")
 
-        clickNodeOrParent(timeNode)
+        val opened = clickNodeOrParent(timeNode)
         timeNode.recycle()
+        if (!opened) throw IllegalStateException("Could not open the Time display setting.")
         delay(700)
 
-        val dialogRoot = rootInActiveWindow ?: return
+        val dialogRoot = rootInActiveWindow
+            ?: throw IllegalStateException("The Time display options did not open.")
         val targetLabels = if (mode is TargetMode.HideAll || mode is TargetMode.BothEngage) {
             compatibilityManager.doNotShowLabels
         } else {
@@ -490,37 +494,65 @@ class StatusBarAccessibilityService : AccessibilityService() {
         if (targetOptionNode != null) {
             val selected = clickNodeOrParent(targetOptionNode)
             targetOptionNode.recycle()
-            if (!selected) throw IllegalStateException("Could not select the requested Time display option.")
+            if (!selected) {
+                throw IllegalStateException("Could not select the requested Time display option: ${targetLabels.first()}.")
+            }
             delay(350)
             Log.i(TAG, "Selected Time option: ${targetLabels.first()}")
         } else {
-            Log.w(TAG, "Could not find Time dialog option for: $targetLabels")
-            // Dismiss dialog if not found
             performGlobalAction(GLOBAL_ACTION_BACK)
+            throw IllegalStateException(
+                "The requested Time display option was not found: ${targetLabels.joinToString()}. The clock may still be visible."
+            )
         }
     }
 
     private suspend fun handleNetworkSpeedSetting(mode: TargetMode): Boolean {
-        val root = rootInActiveWindow ?: return true
-        val speedLabelNode = findNodeMatching(root, compatibilityManager.networkSpeedLabels) ?: return true
+        val root = rootInActiveWindow
+            ?: throw IllegalStateException("Could not read the Status bar screen to configure network speed.")
+        val speedLabelNode = findNodeMatching(root, compatibilityManager.networkSpeedLabels)
+            ?: throw IllegalStateException("Could not find the real-time network speed setting. Network speed was not changed.")
 
-        var originalState = true
         val toggleNode = findAssociatedCheckable(speedLabelNode)
-        if (toggleNode != null) {
-            originalState = toggleNode.isChecked
-            val targetState = if (mode is TargetMode.HideAll || mode is TargetMode.BothEngage) false else {
-                backupManager.getExistingBackup()?.originalRealTimeNetworkSpeed ?: originalState
-            }
-
-            if (toggleNode.isChecked != targetState) {
-                val changed = clickNodeOrParent(toggleNode)
-                if (!changed) throw IllegalStateException("Could not change the real-time network speed switch.")
-                delay(350)
-                Log.i(TAG, "Requested real-time network speed state: $targetState")
-            }
-            toggleNode.recycle()
-        }
         speedLabelNode.recycle()
+        if (toggleNode == null) {
+            throw IllegalStateException("Found the network speed setting but could not locate its on/off switch.")
+        }
+
+        val originalState = toggleNode.isChecked
+        val targetState = if (mode is TargetMode.HideAll || mode is TargetMode.BothEngage) {
+            false
+        } else {
+            backupManager.getExistingBackup()?.originalRealTimeNetworkSpeed ?: originalState
+        }
+
+        if (originalState != targetState) {
+            val changed = clickNodeOrParent(toggleNode)
+            toggleNode.recycle()
+            if (!changed) throw IllegalStateException("Could not change the real-time network speed switch.")
+            delay(450)
+
+            val verifyRoot = rootInActiveWindow
+                ?: throw IllegalStateException("Could not verify the real-time network speed switch.")
+            val verifyLabel = findNodeMatching(verifyRoot, compatibilityManager.networkSpeedLabels)
+                ?: throw IllegalStateException("The network speed setting disappeared before verification.")
+            val verifyToggle = findAssociatedCheckable(verifyLabel)
+            verifyLabel.recycle()
+            if (verifyToggle == null) {
+                throw IllegalStateException("Could not verify the real-time network speed switch state.")
+            }
+            val verifiedState = verifyToggle.isChecked
+            verifyToggle.recycle()
+            if (verifiedState != targetState) {
+                throw IllegalStateException(
+                    "Real-time network speed remained ${if (verifiedState) "ON" else "OFF"}; requested state was ${if (targetState) "ON" else "OFF"}."
+                )
+            }
+            Log.i(TAG, "Verified real-time network speed state: $targetState")
+        } else {
+            toggleNode.recycle()
+            Log.i(TAG, "Real-time network speed already has the requested state: $targetState")
+        }
         return originalState
     }
 
