@@ -48,7 +48,7 @@ class StatusBarAccessibilityService : AccessibilityService() {
         super.onCreate()
         dataStoreRepository = DataStoreRepository(applicationContext)
         backupManager = SettingsBackupManager(dataStoreRepository)
-        overlayManager = AutomationOverlayManager(applicationContext)
+        overlayManager = AutomationOverlayManager(this)
         Log.i(TAG, "StatusBarAccessibilityService created.")
     }
 
