@@ -12,7 +12,6 @@ import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
-import android.provider.Settings
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
@@ -26,7 +25,10 @@ import com.statusbarmanager.app.MainActivity
 import com.statusbarmanager.app.automation.AutomationProgress
 import com.statusbarmanager.app.automation.AutomationStep
 
-/** Full-screen, minimal progress cover shown above Settings while SysHush runs. */
+/**
+ * Full-screen progress cover implemented as an accessibility overlay.
+ * Android keeps the underlying Settings window introspectable by this service.
+ */
 class AutomationOverlayManager(private val context: Context) {
 
     companion object {
@@ -58,7 +60,9 @@ class AutomationOverlayManager(private val context: Context) {
     }
 
     private fun dp(value: Int) = (value * context.resources.displayMetrics.density).toInt()
-    fun canDrawOverlay(): Boolean = Settings.canDrawOverlays(context)
+    // This window is attached by the enabled AccessibilityService itself.
+    // TYPE_ACCESSIBILITY_OVERLAY does not require SYSTEM_ALERT_WINDOW permission.
+    fun canDrawOverlay(): Boolean = true
 
     fun updateProgress(progress: AutomationProgress) {
         mainHandler.post {
@@ -161,7 +165,7 @@ class AutomationOverlayManager(private val context: Context) {
         val params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.MATCH_PARENT,
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                 WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
                 WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
