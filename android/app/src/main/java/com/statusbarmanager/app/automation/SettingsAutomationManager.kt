@@ -25,11 +25,10 @@ class SettingsAutomationManager(private val context: Context) {
     }
 
     /**
-     * Checks whether Display over other apps (floating progress overlay) permission is granted
+     * The progress cover uses TYPE_ACCESSIBILITY_OVERLAY and is owned by the enabled
+     * AccessibilityService. Android does not require the separate SYSTEM_ALERT_WINDOW grant.
      */
-    fun canDrawOverlays(): Boolean {
-        return Settings.canDrawOverlays(context)
-    }
+    fun canDrawOverlays(): Boolean = true
 
     /**
      * Opens system Accessibility Settings screen
