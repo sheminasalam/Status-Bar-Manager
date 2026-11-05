@@ -63,6 +63,18 @@
         </receiver>
 
         <receiver
+            android:name=".widget.StatusBarOnlyWidgetProvider"
+            android:exported="true"
+            android:label="@string/widget_status_bar_only_name">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/syshush_status_bar_widget_info" />
+        </receiver>
+
+        <receiver
             android:name=".widget.StatusBarWidgetProvider"
             android:exported="true"
             android:label="@string/widget_name">
@@ -70,6 +82,7 @@
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
                 <action android:name="com.statusbarmanager.app.widget.ACTION_WIDGET_TOGGLE" />
                 <action android:name="com.statusbarmanager.app.widget.ACTION_WIDGET_FORCE_STOP" />
+                <action android:name="com.statusbarmanager.app.widget.ACTION_WIDGET_STATUS_BAR_ONLY" />
             </intent-filter>
             <meta-data
                 android:name="android.appwidget.provider"
