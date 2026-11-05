@@ -42,3 +42,9 @@ class StopAppsWidgetProvider : IconActionWidgetProvider() {
     override val action = StatusBarWidgetProvider.ACTION_WIDGET_FORCE_STOP
     override val requestCodeBase = 4200
 }
+
+class StatusBarOnlyWidgetProvider : IconActionWidgetProvider() {
+    override val layoutId = R.layout.widget_syshush_status_bar_icon
+    override val action = StatusBarWidgetProvider.ACTION_WIDGET_STATUS_BAR_ONLY
+    override val requestCodeBase = 4300
+}
