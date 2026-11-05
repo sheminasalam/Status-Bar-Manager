@@ -1,4 +1,4 @@
-name: Build Android APK
+name: Build and Verify Android APK
 
 on:
   workflow_dispatch:
@@ -22,7 +22,7 @@ permissions:
 
 jobs:
   build:
-    name: Build debug APK
+    name: Build & Verify (Debug & Release)
     runs-on: ubuntu-latest
 
     steps:
@@ -35,7 +35,7 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      # Install Android SDK components (avoids removed 'tools' package)
+      # Install Android SDK components
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
         with:
@@ -47,19 +47,44 @@ jobs:
         with:
           gradle-version: "8.9"
 
-      # Execute debug build using installed Gradle 8.9 in the android project directory
-      - name: Build debug APK
+      # Execute Unit Tests
+      - name: Run Unit Tests
         run: |
           cd android
-          gradle --no-daemon clean assembleDebug
+          gradle --no-daemon testDebugUnitTest
 
-      # Upload resulting APK artifact
-      - name: Upload debug APK
+      # Execute Lint
+      - name: Run Lint
+        run: |
+          cd android
+          gradle --no-daemon lintDebug
+
+      # Build both Debug and Release APKs
+      - name: Build Debug & Release APKs
+        run: |
+          cd android
+          gradle --no-daemon clean assembleDebug assembleRelease
+
+      # Upload Debug APK artifact
+      - name: Upload Debug APK
+        if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: StatusBar-Manager-debug-apk
+          name: SysHush-debug-apk
           path: |
             android/app/build/outputs/apk/debug/*.apk
             app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 14
+
+      # Upload Release APK artifact
+      - name: Upload Release APK
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: SysHush-release-apk
+          path: |
+            android/app/build/outputs/apk/release/*.apk
+            app/build/outputs/apk/release/*.apk
           if-no-files-found: error
           retention-days: 14

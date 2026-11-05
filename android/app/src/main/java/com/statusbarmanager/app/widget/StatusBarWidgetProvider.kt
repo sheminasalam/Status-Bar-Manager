@@ -85,12 +85,27 @@ class StatusBarWidgetProvider : AppWidgetProvider() {
 
             CoroutineScope(Dispatchers.IO).launch {
                 val isHideActive = repo.isHideActiveFlow.first()
+                val engageMode = repo.engageModeFlow.first()
+
                 if (isHideActive) {
+                    // Disengage restores status bar settings; does not restart apps and needs no confirmation
                     coordinator.disengage()
+                    updateAllWidgets(context)
                 } else {
-                    coordinator.engage()
+                    // Engaging: check if mode requires force-stop confirmation
+                    if (engageMode == EngageMode.FORCE_STOP_APPS_ONLY || engageMode == EngageMode.BOTH) {
+                        // Open app to present the safety confirmation dialog to the user
+                        val confirmIntent = Intent(context, MainActivity::class.java).apply {
+                            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                            putExtra("confirm_force_stop", true)
+                        }
+                        context.startActivity(confirmIntent)
+                    } else {
+                        // Status Bar Only mode: safe to engage directly
+                        coordinator.engage()
+                        updateAllWidgets(context)
+                    }
                 }
-                updateAllWidgets(context)
             }
         }
     }

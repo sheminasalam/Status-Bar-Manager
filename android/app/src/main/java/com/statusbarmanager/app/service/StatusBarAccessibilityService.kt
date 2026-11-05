@@ -120,11 +120,11 @@ class StatusBarAccessibilityService : AccessibilityService() {
         }
 
         val opTitle = when {
-            mode is TargetMode.BothEngage -> "StatusBar Manager – Engage (Both)"
-            mode is TargetMode.BothDisengage -> "StatusBar Manager – Disengage"
-            mode is TargetMode.ForceStopOnly -> "StatusBar Manager – Force Stop Apps"
-            mode is TargetMode.HideAll -> "StatusBar Manager – Hide Status Bar"
-            else -> "StatusBar Manager – Restore Status Bar"
+            mode is TargetMode.BothEngage -> "SysHush – Engage (Both)"
+            mode is TargetMode.BothDisengage -> "SysHush – Disengage"
+            mode is TargetMode.ForceStopOnly -> "SysHush – Force Stop Apps"
+            mode is TargetMode.HideAll -> "SysHush – Hide Status Bar"
+            else -> "SysHush – Restore Status Bar"
         }
 
         var checklist = AutomationProgress.forMode(engageMode, isEngage = !isRestoreMode)
@@ -233,7 +233,7 @@ class StatusBarAccessibilityService : AccessibilityService() {
 
         val discoveredCount = discoveredIconsMap.size
         val alreadyDisabledCount = discoveredIconsMap.values.count { !it }
-        var stats = IconStats(
+        stats = IconStats(
             discovered = discoveredCount,
             disabled = 0,
             alreadyDisabled = alreadyDisabledCount,

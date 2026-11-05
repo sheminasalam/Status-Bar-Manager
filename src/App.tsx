@@ -78,14 +78,14 @@ export default function App() {
             <div>
               <div className="flex items-center space-x-2">
                 <span className="font-bold text-base text-white tracking-tight">
-                  StatusBar Manager
+                  SysHush
                 </span>
-                <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-blue-950 text-blue-400 border border-blue-500/30 uppercase tracking-wide">
-                  Native Android 15
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-cyan-950 text-cyan-400 border border-cyan-500/30 uppercase tracking-wide">
+                  System Mode Control
                 </span>
               </div>
               <p className="text-[11px] text-gray-400 hidden sm:block">
-                Kotlin • Jetpack Compose Material 3 • Accessibility Service Automation
+                Control your status bar and manage background applications with one simple action.
               </p>
             </div>
           </div>

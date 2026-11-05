@@ -32,6 +32,7 @@ class DataStoreRepository(private val context: Context) {
         
         // Objective 1 & 2: Engage Mode and Whitelist
         val ENGAGE_MODE = stringPreferencesKey("engage_mode")
+        val ACTIVE_ENGAGEMENT_MODE = stringPreferencesKey("active_engagement_mode")
         val WHITELIST_PACKAGES = stringSetPreferencesKey("whitelist_packages")
         val LAST_FORCE_STOP_STATS = stringPreferencesKey("last_force_stop_stats")
     }
@@ -124,6 +125,24 @@ class DataStoreRepository(private val context: Context) {
         val prefs = context.dataStore.data.first()
         val modeStr = prefs[PreferencesKeys.ENGAGE_MODE] ?: EngageMode.BOTH.name
         return EngageMode.fromString(modeStr)
+    }
+
+    suspend fun setActiveEngagementMode(mode: EngageMode) {
+        context.dataStore.edit { preferences ->
+            preferences[PreferencesKeys.ACTIVE_ENGAGEMENT_MODE] = mode.name
+        }
+    }
+
+    suspend fun getActiveEngagementMode(): EngageMode? {
+        val prefs = context.dataStore.data.first()
+        val modeStr = prefs[PreferencesKeys.ACTIVE_ENGAGEMENT_MODE] ?: return null
+        return EngageMode.fromString(modeStr)
+    }
+
+    suspend fun clearActiveEngagementMode() {
+        context.dataStore.edit { preferences ->
+            preferences.remove(PreferencesKeys.ACTIVE_ENGAGEMENT_MODE)
+        }
     }
 
     suspend fun addToWhitelist(packageName: String) {

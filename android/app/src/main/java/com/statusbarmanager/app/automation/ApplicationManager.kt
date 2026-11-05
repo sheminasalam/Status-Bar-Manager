@@ -104,7 +104,7 @@ class ApplicationManager(private val context: Context) {
             when {
                 pkg == myPackage -> {
                     isProtectedRole = true
-                    protectionReason = "Self (StatusBar Manager)"
+                    protectionReason = "Self (SysHush)"
                 }
                 pkg == launcherPackage -> {
                     isProtectedRole = true

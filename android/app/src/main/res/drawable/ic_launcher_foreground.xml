@@ -4,104 +4,101 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
+
     <group
         android:pivotX="54"
         android:pivotY="54">
-        
-        <!-- Outer Glow / Accent Ring -->
-        <path
-            android:fillColor="#1E3A8A"
-            android:fillAlpha="0.3"
-            android:pathData="M54,18 C73.88,18 90,34.12 90,54 C90,73.88 73.88,90 54,90 C34.12,90 18,73.88 18,54 C18,34.12 34.12,18 54,18 Z" />
 
-        <!-- Phone Outer Body -->
+        <!-- Outer Ambient Control Aura / Quiet Ring -->
         <path
-            android:fillColor="#1E293B"
-            android:strokeColor="#3B82F6"
+            android:fillColor="#06B6D4"
+            android:fillAlpha="0.12"
+            android:pathData="M54,20 C72.78,20 88,35.22 88,54 C88,72.78 72.78,88 54,88 C35.22,88 20,72.78 20,54 C20,35.22 35.22,20 54,20 Z" />
+
+        <path
+            android:fillColor="#3B82F6"
+            android:fillAlpha="0.08"
+            android:pathData="M54,26 C69.46,26 82,38.54 82,54 C82,69.46 69.46,82 54,82 C38.54,82 26,69.46 26,54 C26,38.54 38.54,26 54,26 Z" />
+
+        <!-- Clean Modern Smartphone Silhouette -->
+        <!-- Outer Chassis -->
+        <path
+            android:fillColor="#111827"
+            android:strokeColor="#1E293B"
             android:strokeWidth="1.5"
-            android:pathData="M37,20 L71,20 A7,7 0 0 1 78,27 L78,81 A7,7 0 0 1 71,88 L37,88 A7,7 0 0 1 30,81 L30,27 A7,7 0 0 1 37,20 Z" />
+            android:pathData="M37,22 L71,22 A8,8 0 0 1 79,30 L79,78 A8,8 0 0 1 71,86 L37,86 A8,8 0 0 1 29,78 L29,30 A8,8 0 0 1 37,22 Z" />
 
-        <!-- Phone Screen Area -->
+        <!-- Screen Surface -->
         <path
-            android:fillColor="#0B0F17"
-            android:pathData="M33,26 L75,26 L75,82 L33,82 Z" />
-
-        <!-- Top Speaker Cutout -->
-        <path
-            android:fillColor="#64748B"
-            android:pathData="M50,22.5 L58,22.5 A1,1 0 0 1 59,23.5 L59,23.5 A1,1 0 0 1 58,24.5 L50,24.5 A1,1 0 0 1 49,23.5 L49,23.5 A1,1 0 0 1 50,22.5 Z" />
-
-        <!-- Highlighted Status Bar Band -->
-        <path
-            android:fillColor="#2563EB"
-            android:fillAlpha="0.25"
-            android:pathData="M33,26 L75,26 L75,37 L33,37 Z" />
-        <path
-            android:strokeColor="#2563EB"
-            android:strokeWidth="0.75"
-            android:pathData="M33,37 L75,37" />
-
-        <!-- Status Bar: Time text glyphs / Clock icon -->
-        <path
-            android:strokeColor="#60A5FA"
+            android:fillColor="#090D16"
+            android:strokeColor="#0E7490"
             android:strokeWidth="1"
-            android:strokeLineCap="round"
-            android:pathData="M38,31.5 A2.5,2.5 0 1 0 43,31.5 A2.5,2.5 0 1 0 38,31.5" />
+            android:pathData="M33,26 L75,26 A4,4 0 0 1 79,30 L79,78 A4,4 0 0 1 75,82 L33,82 A4,4 0 0 1 29,78 L29,30 A4,4 0 0 1 33,26 Z" />
+
+        <!-- Top Status Bar Area: Fading / Dissolving into quiet dots -->
+        <!-- Subtle Top Status Bar Horizon Line -->
         <path
-            android:strokeColor="#60A5FA"
+            android:strokeColor="#1E293B"
             android:strokeWidth="0.8"
-            android:strokeLineCap="round"
-            android:pathData="M40.5,30 L40.5,31.5 L41.8,31.5" />
+            android:pathData="M34,36 L74,36" />
 
-        <!-- Status Bar: Wi-Fi Waves -->
+        <!-- Status Pill: Dissolving Clock/Status Line into Calm Dots -->
+        <!-- Solid Cyan line dissolving to the right -->
         <path
-            android:strokeColor="#38BDF8"
-            android:strokeWidth="0.9"
+            android:strokeColor="#22D3EE"
+            android:strokeWidth="1.6"
             android:strokeLineCap="round"
-            android:pathData="M59,33 A4,4 0 0 1 65,33" />
+            android:pathData="M37,31 L47,31" />
+
+        <!-- Fading status indicators (dots representing system quieting / hushed state) -->
         <path
-            android:strokeColor="#38BDF8"
-            android:strokeWidth="0.9"
-            android:strokeLineCap="round"
-            android:pathData="M60.5,34.5 A2,2 0 0 1 63.5,34.5" />
+            android:fillColor="#22D3EE"
+            android:fillAlpha="0.8"
+            android:pathData="M52,31 A1.2,1.2 0 1 0 52,31.01" />
+
         <path
             android:fillColor="#38BDF8"
-            android:pathData="M62,35.5 A0.6,0.6 0 1 0 62,36.7 A0.6,0.6 0 1 0 62,35.5" />
+            android:fillAlpha="0.5"
+            android:pathData="M58,31 A1.1,1.1 0 1 0 58,31.01" />
 
-        <!-- Status Bar: Battery Icon Capsule -->
         <path
-            android:strokeColor="#34D399"
-            android:strokeWidth="0.9"
-            android:pathData="M67,29.5 L72,29.5 A1,1 0 0 1 73,30.5 L73,33.5 A1,1 0 0 1 72,34.5 L67,34.5 A1,1 0 0 1 66,33.5 L66,30.5 A1,1 0 0 1 67,29.5 Z" />
-        <path
-            android:fillColor="#34D399"
-            android:pathData="M73,31.2 L74,31.2 L74,32.8 L73,32.8 Z" />
-        <path
-            android:fillColor="#34D399"
-            android:pathData="M67.5,31 L70.5,31 L70.5,33 L67.5,33 Z" />
+            android:fillColor="#818CF8"
+            android:fillAlpha="0.3"
+            android:pathData="M64,31 A1.0,1.0 0 1 0 64,31.01" />
 
-        <!-- Center Master Switch / Toggle Control -->
-        <!-- Switch Track -->
         <path
-            android:fillColor="#1E293B"
-            android:strokeColor="#3B82F6"
-            android:strokeWidth="1.2"
-            android:pathData="M44,52 L64,52 A6,6 0 0 1 70,58 L70,58 A6,6 0 0 1 64,64 L44,64 A6,6 0 0 1 38,58 L38,58 A6,6 0 0 1 44,52 Z" />
-        
-        <!-- Switch Thumb (Active Cyan/Blue Knob) -->
-        <path
-            android:fillColor="#38BDF8"
-            android:pathData="M64,58 A4.5,4.5 0 1 0 55,58 A4.5,4.5 0 1 0 64,58 Z" />
+            android:fillColor="#C084FC"
+            android:fillAlpha="0.15"
+            android:pathData="M70,31 A0.9,0.9 0 1 0 70,31.01" />
 
-        <!-- Visibility / Eye Icon below toggle -->
+        <!-- Center System Control / Toggle Element: High-contrast Electric Cyan & Slate -->
+        <!-- Toggle Pill Track -->
         <path
-            android:strokeColor="#94A3B8"
+            android:fillColor="#0F172A"
+            android:strokeColor="#0284C7"
+            android:strokeWidth="1.4"
+            android:pathData="M43,48 L65,48 A7,7 0 0 1 72,55 L72,55 A7,7 0 0 1 65,62 L43,62 A7,7 0 0 1 36,55 L36,55 A7,7 0 0 1 43,48 Z" />
+
+        <!-- Active Toggle Thumb with Neon Glow (Electric Cyan Accent) -->
+        <path
+            android:fillColor="#22D3EE"
+            android:pathData="M65,55 A5,5 0 1 0 55,55 A5,5 0 1 0 65,55 Z" />
+
+        <!-- Concentric Hushing / Calming Wave below control -->
+        <!-- Subtle Shield / Protection arc guarding background apps -->
+        <path
+            android:strokeColor="#6366F1"
             android:strokeWidth="1.2"
             android:strokeLineCap="round"
-            android:pathData="M43,72 C47,68 61,68 65,72 C61,76 47,76 43,72 Z" />
+            android:strokeAlpha="0.7"
+            android:pathData="M46,70 C51,73.5 57,73.5 62,70" />
+
         <path
-            android:fillColor="#60A5FA"
-            android:pathData="M54,72 A2,2 0 1 0 54,68 A2,2 0 1 0 54,72 Z" />
-            
+            android:strokeColor="#38BDF8"
+            android:strokeWidth="1.0"
+            android:strokeLineCap="round"
+            android:strokeAlpha="0.5"
+            android:pathData="M49,74 C52,76 56,76 59,74" />
+
     </group>
 </vector>

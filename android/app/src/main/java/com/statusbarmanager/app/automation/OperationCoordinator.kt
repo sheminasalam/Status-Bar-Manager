@@ -44,6 +44,8 @@ class OperationCoordinator(
 
         val mode = dataStoreRepository.getEngageMode()
         Log.i(TAG, "Initiating Engage with mode: $mode")
+        // Persist the actual mode used for active engagement
+        dataStoreRepository.setActiveEngagementMode(mode)
 
         val targetMode = when (mode) {
             EngageMode.STATUS_BAR_ONLY -> TargetMode.HideAll
@@ -57,8 +59,9 @@ class OperationCoordinator(
     }
 
     /**
-     * Executes the Disengage action according to the currently configured EngageMode.
-     * Restores original status bar configuration. NEVER relaunches or restarts stopped apps.
+     * Executes the Disengage action according to the previously engaged mode.
+     * Restores original status bar configuration only if status bar was actually hidden.
+     * NEVER relaunches or restarts stopped apps.
      */
     suspend fun disengage(): Boolean {
         val service = StatusBarAccessibilityService.instance
@@ -67,14 +70,16 @@ class OperationCoordinator(
             return false
         }
 
-        val mode = dataStoreRepository.getEngageMode()
-        Log.i(TAG, "Initiating Disengage with mode: $mode")
+        // Read the actual mode that was engaged, falling back to configured mode
+        val activeMode = dataStoreRepository.getActiveEngagementMode() ?: dataStoreRepository.getEngageMode()
+        Log.i(TAG, "Initiating Disengage with active engagement mode: $activeMode")
 
-        val targetMode = when (mode) {
+        val targetMode = when (activeMode) {
             EngageMode.STATUS_BAR_ONLY -> TargetMode.RestoreOriginal
             EngageMode.FORCE_STOP_APPS_ONLY -> {
-                // In Force Stop Only mode, disengaging performs no app restart
+                // In Force Stop Only mode, disengaging performs no app restart and leaves status bar untouched
                 dataStoreRepository.setHideActive(false)
+                dataStoreRepository.clearActiveEngagementMode()
                 dataStoreRepository.recordOperation("SUCCESS", "Apps remain in stopped state. Status bar was untouched.")
                 StatusBarWidgetProvider.updateAllWidgets(context)
                 return true
@@ -82,6 +87,7 @@ class OperationCoordinator(
             EngageMode.BOTH -> TargetMode.BothDisengage
         }
 
+        dataStoreRepository.clearActiveEngagementMode()
         service.startAutomation(targetMode)
         StatusBarWidgetProvider.updateAllWidgets(context)
         return true

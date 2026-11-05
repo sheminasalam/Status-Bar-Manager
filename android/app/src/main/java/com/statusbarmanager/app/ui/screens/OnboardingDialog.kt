@@ -59,7 +59,7 @@ fun OnboardingDialog(
                 Spacer(modifier = Modifier.height(12.dp))
 
                 Text(
-                    text = "StatusBar Manager uses an Android Accessibility Service exclusively to automate navigating to Settings → Notifications & status bar to adjust your status icons.",
+                    text = "SysHush uses an Android Accessibility Service exclusively to automate navigating to Settings → Notifications & status bar and App Info to adjust your system visibility and quiet background applications.",
                     style = MaterialTheme.typography.bodyMedium.copy(color = TextSecondary)
                 )
 

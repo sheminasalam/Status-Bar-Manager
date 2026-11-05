@@ -73,14 +73,14 @@ fun MainScreen(
                         Spacer(modifier = Modifier.width(12.dp))
                         Column {
                             Text(
-                                text = "StatusBar Manager",
+                                text = androidx.compose.ui.res.stringResource(com.statusbarmanager.app.R.string.app_name),
                                 style = MaterialTheme.typography.titleLarge.copy(
                                     fontWeight = FontWeight.Bold,
                                     color = TextPrimary
                                 )
                             )
                             Text(
-                                text = "Automate Android system status bar settings",
+                                text = androidx.compose.ui.res.stringResource(com.statusbarmanager.app.R.string.app_subtitle),
                                 style = MaterialTheme.typography.labelSmall.copy(color = TextSecondary)
                             )
                         }
@@ -779,7 +779,7 @@ fun AccessibilityBanner(onRequestPermission: () -> Unit) {
             }
             Spacer(modifier = Modifier.height(6.dp))
             Text(
-                text = "StatusBar Manager requires Accessibility Service permission to navigate system settings on your behalf without requiring root or ADB commands.",
+                text = "SysHush requires Accessibility Service permission to navigate system settings on your behalf without requiring root or ADB commands.",
                 style = MaterialTheme.typography.bodyMedium.copy(color = TextPrimary)
             )
             Spacer(modifier = Modifier.height(12.dp))

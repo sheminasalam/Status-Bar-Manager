@@ -49,16 +49,26 @@ class MainActivity : ComponentActivity() {
                     mutableStateOf(automationManager.canDrawOverlays())
                 }
 
-                var showOnboardingDialog by remember { mutableStateOf(false) }
+                var showOnboardingDialog by remember {
+                    mutableStateOf(intent.getBooleanExtra("prompt_accessibility", false))
+                }
                 var showBackupDialog by remember { mutableStateOf(false) }
                 var showWhitelistScreen by remember { mutableStateOf(false) }
-                var showForceStopConfirmDialog by remember { mutableStateOf(false) }
+                var showForceStopConfirmDialog by remember {
+                    mutableStateOf(intent.getBooleanExtra("confirm_force_stop", false))
+                }
 
                 val automationProgress by automationManager.progressState.collectAsState()
 
                 DisposableEffect(Unit) {
                     isAccessibilityGranted = automationManager.isAccessibilityPermissionGranted()
                     isOverlayGranted = automationManager.canDrawOverlays()
+                    if (intent.getBooleanExtra("confirm_force_stop", false)) {
+                        showForceStopConfirmDialog = true
+                    }
+                    if (intent.getBooleanExtra("prompt_accessibility", false)) {
+                        showOnboardingDialog = true
+                    }
                     onDispose { }
                 }
 

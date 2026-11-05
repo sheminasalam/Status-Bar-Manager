@@ -129,7 +129,7 @@ class AutomationOverlayManager(private val context: Context) {
         }
 
         val title = TextView(context).apply {
-            text = "StatusBar Manager – Engage"
+            text = "SysHush – Engage"
             setTextColor(Color.parseColor("#F8FAFC"))
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f)
             setTypeface(typeface, android.graphics.Typeface.BOLD)
