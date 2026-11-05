@@ -844,23 +844,21 @@ jobs:
           log-accepted-android-sdk-licenses: true
           packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
 
-      - name: Setup Gradle
+      - name: Setup Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
-
-      - name: Grant execute permission for gradlew
-        run: |
-          if [ -f "./gradlew" ]; then
-            chmod +x ./gradlew
-          elif [ -f "./android/gradlew" ]; then
-            chmod +x ./android/gradlew
-          fi
+        with:
+          gradle-version: "8.9"
 
       - name: Build Debug APK
         run: |
-          if [ -f "./gradlew" ]; then
-            ./gradlew assembleDebug --stacktrace
-          elif [ -f "./android/gradlew" ]; then
-            cd android && ./gradlew assembleDebug --stacktrace
+          if [ -d "android" ]; then
+            cd android
+          fi
+          if [ -f "gradle/wrapper/gradle-wrapper.jar" ]; then
+            chmod +x gradlew
+            ./gradlew --no-daemon clean assembleDebug
+          else
+            gradle --no-daemon clean assembleDebug
           fi
 
       - name: Upload Debug APK
@@ -924,11 +922,12 @@ jobs:
 
       - name: Build debug APK
         run: |
-          if [ -f "./android/gradlew" ]; then
-            chmod +x ./android/gradlew
-            ./android/gradlew -p android --no-daemon clean assembleDebug
+          cd android
+          if [ -f "gradle/wrapper/gradle-wrapper.jar" ]; then
+            chmod +x gradlew
+            ./gradlew --no-daemon clean assembleDebug
           else
-            gradle -p android --no-daemon clean assembleDebug
+            gradle --no-daemon clean assembleDebug
           fi
 
       - name: Upload debug APK

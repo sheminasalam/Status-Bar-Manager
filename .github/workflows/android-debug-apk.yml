@@ -43,11 +43,12 @@ jobs:
 
       - name: Build debug APK
         run: |
-          if [ -f "./android/gradlew" ]; then
-            chmod +x ./android/gradlew
-            ./android/gradlew -p android --no-daemon clean assembleDebug
+          cd android
+          if [ -f "gradle/wrapper/gradle-wrapper.jar" ]; then
+            chmod +x gradlew
+            ./gradlew --no-daemon clean assembleDebug
           else
-            gradle -p android --no-daemon clean assembleDebug
+            gradle --no-daemon clean assembleDebug
           fi
 
       - name: Upload debug APK
