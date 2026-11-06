@@ -586,8 +586,14 @@ class StatusBarAccessibilityService : AccessibilityService() {
         val timeNode = findNodeMatching(root, compatibilityManager.timeMenuLabels)
             ?: throw IllegalStateException("Could not find the Time display setting on the Status bar page.")
 
-        clickNodeOrParent(timeNode)
-        timeNode.recycle()
+        val openedTimeOptions = try {
+            clickNodeOrParent(timeNode)
+        } finally {
+            timeNode.recycle()
+        }
+        if (!openedTimeOptions) {
+            throw IllegalStateException("Could not open the Time display options.")
+        }
         delay(700)
 
         val dialogRoot = rootInActiveWindow
@@ -601,10 +607,18 @@ class StatusBarAccessibilityService : AccessibilityService() {
 
         val targetOptionNode = findNodeMatching(dialogRoot, targetLabels)
         if (targetOptionNode != null) {
-            clickNodeOrParent(targetOptionNode)
-            targetOptionNode.recycle()
+            val selected = try {
+                clickNodeOrParent(targetOptionNode)
+            } finally {
+                targetOptionNode.recycle()
+                dialogRoot.recycle()
+            }
+            if (!selected) {
+                throw IllegalStateException("Android did not accept the click on Time option: $targetLabels")
+            }
             Log.i(TAG, "Selected Time option: ${targetLabels.first()}")
         } else {
+            dialogRoot.recycle()
             Log.e(TAG, "Could not find Time dialog option for: $targetLabels")
             // Dismiss dialog if not found
             performGlobalAction(GLOBAL_ACTION_BACK)
@@ -625,8 +639,13 @@ class StatusBarAccessibilityService : AccessibilityService() {
             }
 
             if (toggleNode.isChecked != targetState) {
-                clickNodeOrParent(toggleNode)
-                Log.i(TAG, "Toggled real-time network speed from ${toggleNode.isChecked} to $targetState")
+                val clicked = clickNodeOrParent(toggleNode)
+                if (!clicked) {
+                    toggleNode.recycle()
+                    speedLabelNode.recycle()
+                    throw IllegalStateException("Could not click the real-time network speed switch.")
+                }
+                Log.i(TAG, "Requested real-time network speed state: $targetState")
                 delay(300)
             }
             toggleNode.recycle()
@@ -765,8 +784,12 @@ class StatusBarAccessibilityService : AccessibilityService() {
             for ((label, toggleNode) in togglesOnScreen) {
                 if (keysToDisable.contains(label)) {
                     if (toggleNode.isChecked) {
-                        clickNodeOrParent(toggleNode)
-                        delay(280) // Let switch animation settle
+                        val clicked = clickNodeOrParent(toggleNode)
+                        delay(350) // Let switch animation settle
+                        if (!clicked) {
+                            Log.w(TAG, "Android rejected click for status icon '$label'")
+                            continue
+                        }
                         disabledCount++
                         keysToDisable.remove(label)
 
@@ -822,8 +845,12 @@ class StatusBarAccessibilityService : AccessibilityService() {
                 if (pendingKeys.contains(label)) {
                     val desiredState = targetBaselineMap[label] ?: false
                     if (toggleNode.isChecked != desiredState) {
-                        clickNodeOrParent(toggleNode)
-                        delay(280)
+                        val clicked = clickNodeOrParent(toggleNode)
+                        delay(350)
+                        if (!clicked) {
+                            Log.w(TAG, "Android rejected restore click for status icon '$label'")
+                            continue
+                        }
                     }
                     restoredCount++
                     pendingKeys.remove(label)
@@ -892,7 +919,7 @@ class StatusBarAccessibilityService : AccessibilityService() {
         if (headphoneNode != null) {
             val toggle = findAssociatedCheckable(headphoneNode)
             if (toggle != null) {
-                val isHide = mode is TargetMode.HideAll
+                val isHide = mode is TargetMode.HideAll || mode is TargetMode.BothEngage
                 if (isHide && toggle.isChecked) {
                     clickNodeOrParent(toggle)
                     delay(300)
@@ -999,6 +1026,9 @@ class StatusBarAccessibilityService : AccessibilityService() {
      * as "Screen timeout".
      */
     private fun findNodeMatching(root: AccessibilityNodeInfo, candidates: List<String>): AccessibilityNodeInfo? {
+        // This is the matching behaviour from the last known-working status-bar
+        // baseline. Preserve OEM labels that contain the setting name in a longer
+        // phrase instead of requiring strict word-boundary matches.
         val queue = ArrayDeque<AccessibilityNodeInfo>()
         queue.add(root)
 
@@ -1007,13 +1037,14 @@ class StatusBarAccessibilityService : AccessibilityService() {
             val text = current.text
             val desc = current.contentDescription
 
-            if (compatibilityManager.matchesAny(text, candidates) || compatibilityManager.matchesAny(desc, candidates)) {
+            if (compatibilityManager.matchesAny(text, candidates) ||
+                compatibilityManager.matchesAny(desc, candidates)
+            ) {
                 return current
             }
 
-            for (i in 0 until current.childCount) {
-                val child = current.getChild(i)
-                if (child != null) queue.add(child)
+            for (index in 0 until current.childCount) {
+                current.getChild(index)?.let(queue::add)
             }
         }
         return null
