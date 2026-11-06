@@ -77,22 +77,30 @@ class AppForceStopAccessibilityController(
             return ForceStopResult.FAILED_OPENING_SETTINGS
         }
 
-        delay(600)
-
-        // Step 2 & 3: Find Force Stop button in active window
-        val root = service.rootInActiveWindow ?: run {
-            delay(250)
-            service.rootInActiveWindow
+        // Settings can take more than a fixed 600 ms to open. Wait for the
+        // requested app's own App Info title before reading or clicking controls.
+        var targetPageSeen = false
+        var forceStopNode: AccessibilityNodeInfo? = null
+        repeat(20) { attempt ->
+            if (forceStopNode == null) {
+                val activeRoot = service.rootInActiveWindow
+                if (activeRoot != null) {
+                    if (isTargetAppInfoPage(activeRoot, appItem)) {
+                        targetPageSeen = true
+                        forceStopNode = findForceStopButton(activeRoot)
+                    }
+                    activeRoot.recycle()
+                }
+                if (forceStopNode == null && attempt < 19) delay(250)
+            }
         }
 
-        if (root == null) {
-            Log.e(TAG, "Unable to inspect active window for ${appItem.packageName}")
+        if (!targetPageSeen) {
+            Log.e(TAG, "App Info screen did not confirm target app ${appItem.packageName}")
             return ForceStopResult.FAILED_OPENING_SETTINGS
         }
-
-        val forceStopNode = findForceStopButton(root)
         if (forceStopNode == null) {
-            Log.w(TAG, "Force Stop button not found in UI for ${appItem.packageName}")
+            Log.w(TAG, "Force Stop button not found in target app UI for ${appItem.packageName}")
             return ForceStopResult.UNAVAILABLE_OR_DISABLED
         }
 
@@ -161,6 +169,37 @@ class AppForceStopAccessibilityController(
         return ForceStopResult.FAILED_CONFIRMATION
     }
 
+    private fun isTargetAppInfoPage(root: AccessibilityNodeInfo, appItem: AppItem): Boolean {
+        val expectedLabel = appItem.appName.trim()
+        val expectedPackage = appItem.packageName.trim()
+        val queue = ArrayDeque<AccessibilityNodeInfo>()
+        queue.add(root)
+
+        var matched = false
+        while (queue.isNotEmpty()) {
+            val node = queue.removeFirst()
+            val values = listOfNotNull(
+                node.text?.toString()?.trim(),
+                node.contentDescription?.toString()?.trim()
+            )
+            if (values.any { value ->
+                    value.equals(expectedLabel, ignoreCase = true) ||
+                        value.contains(expectedPackage, ignoreCase = true)
+                }) {
+                matched = true
+                while (queue.isNotEmpty()) queue.removeFirst().recycle()
+                if (node !== root) node.recycle()
+                break
+            }
+
+            for (index in 0 until node.childCount) {
+                node.getChild(index)?.let(queue::add)
+            }
+            if (node !== root) node.recycle()
+        }
+        return matched
+    }
+
     private fun openAppDetailsSettings(packageName: String): Boolean {
         return try {
             val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
@@ -188,17 +227,23 @@ class AppForceStopAccessibilityController(
                 text.contains(label) || desc.contains(label)
             }
 
-            // Exclude Uninstall or Clear storage controls
+            // Exclude Uninstall or Clear storage controls.
             val isForbidden = text.contains("uninstall") || desc.contains("uninstall") ||
-                    text.contains("desinstalar") || text.contains("clear") || desc.contains("clear")
+                text.contains("desinstalar") || text.contains("clear") || desc.contains("clear")
 
-            if (matches && !isForbidden && (node.isClickable || node.parent?.isClickable == true)) {
-                return node
+            val parent = if (!node.isClickable) node.parent else null
+            val hasClickableParent = parent?.isClickable == true
+            parent?.recycle()
+
+            if (matches && !isForbidden && (node.isClickable || hasClickableParent)) {
+                while (queue.isNotEmpty()) queue.removeFirst().recycle()
+                return if (node === root) AccessibilityNodeInfo.obtain(node) else node
             }
 
-            for (i in 0 until node.childCount) {
-                node.getChild(i)?.let { queue.add(it) }
+            for (index in 0 until node.childCount) {
+                node.getChild(index)?.let(queue::add)
             }
+            if (node !== root) node.recycle()
         }
         return null
     }
@@ -215,17 +260,22 @@ class AppForceStopAccessibilityController(
             val matches = CONFIRMATION_BUTTON_LABELS.any { label ->
                 text == label || desc == label || text.startsWith("ok")
             }
+            val isCancel = text.contains("cancel") || desc.contains("cancel") ||
+                text.contains("annuler")
 
-            // Exclude Cancel
-            val isCancel = text.contains("cancel") || desc.contains("cancel") || text.contains("annuler")
+            val parent = if (!node.isClickable) node.parent else null
+            val hasClickableParent = parent?.isClickable == true
+            parent?.recycle()
 
-            if (matches && !isCancel && (node.isClickable || node.parent?.isClickable == true)) {
-                return node
+            if (matches && !isCancel && (node.isClickable || hasClickableParent)) {
+                while (queue.isNotEmpty()) queue.removeFirst().recycle()
+                return if (node === root) AccessibilityNodeInfo.obtain(node) else node
             }
 
-            for (i in 0 until node.childCount) {
-                node.getChild(i)?.let { queue.add(it) }
+            for (index in 0 until node.childCount) {
+                node.getChild(index)?.let(queue::add)
             }
+            if (node !== root) node.recycle()
         }
         return null
     }
