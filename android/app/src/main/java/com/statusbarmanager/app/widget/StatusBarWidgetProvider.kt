@@ -91,11 +91,6 @@ class StatusBarWidgetProvider : AppWidgetProvider() {
             openMain("prompt_accessibility")
             return
         }
-        if (!automationManager.canDrawOverlays()) {
-            openMain("prompt_overlay")
-            return
-        }
-
         CoroutineScope(Dispatchers.IO).launch {
             if (intent.action == ACTION_WIDGET_STATUS_BAR_ONLY) {
                 coordinator.toggleStatusBarOnly()
