@@ -113,7 +113,7 @@ class DeviceCompatibilityManager {
         val expected = candidate.trim()
         if (actual.isEmpty() || expected.isEmpty()) return false
         return Regex(
-            """(?<![\\p{L}\\p{N}])${Regex.escape(expected)}(?![\\p{L}\\p{N}])""",
+            """(?<![\p{L}\p{N}])${Regex.escape(expected)}(?![\p{L}\p{N}])""",
             RegexOption.IGNORE_CASE
         ).containsMatchIn(actual)
     }
