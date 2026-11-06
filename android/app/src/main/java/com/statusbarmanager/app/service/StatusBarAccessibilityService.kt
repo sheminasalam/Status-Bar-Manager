@@ -641,8 +641,6 @@ class StatusBarAccessibilityService : AccessibilityService() {
             if (toggleNode.isChecked != targetState) {
                 val clicked = clickNodeOrParent(toggleNode)
                 if (!clicked) {
-                    toggleNode.recycle()
-                    speedLabelNode.recycle()
                     throw IllegalStateException("Could not click the real-time network speed switch.")
                 }
                 Log.i(TAG, "Requested real-time network speed state: $targetState")
