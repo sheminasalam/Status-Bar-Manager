@@ -7,6 +7,9 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import com.statusbarmanager.app.automation.EngageMode
 import com.statusbarmanager.app.automation.isActiveProcessImportance
+import com.statusbarmanager.app.automation.DeviceCompatibilityManager
+import com.statusbarmanager.app.automation.TargetMode
+import com.statusbarmanager.app.automation.shouldPersistStatusBarHidden
 
 class SysHushUnitTest {
 
@@ -35,6 +38,23 @@ class SysHushUnitTest {
         assertTrue(forceStopChecklist.isNotEmpty())
         assertTrue(forceStopChecklist.any { it.id == "force_stop" })
     }
+    @Test
+    fun shortStatusBarLabelsMatchWithoutMatchingUnrelatedWords() {
+        val manager = DeviceCompatibilityManager()
+        assertTrue(manager.matchesSettingsLabel("Show time in status bar", "Time"))
+        assertTrue(manager.matchesSettingsLabel("Time display", "Time"))
+        assertFalse(manager.matchesSettingsLabel("Screen timeout", "Time"))
+    }
+
+    @Test
+    fun appOnlyForceStopDoesNotPersistStatusBarAsHidden() {
+        assertFalse(shouldPersistStatusBarHidden(TargetMode.ForceStopOnly))
+        assertTrue(shouldPersistStatusBarHidden(TargetMode.HideAll))
+        assertTrue(shouldPersistStatusBarHidden(TargetMode.BothEngage))
+        assertFalse(shouldPersistStatusBarHidden(TargetMode.RestoreOriginal))
+        assertFalse(shouldPersistStatusBarHidden(TargetMode.BothDisengage))
+    }
+
     @Test
     fun testOnlyNonCachedProcessesAreEligibleForForceStop() {
         assertTrue(
