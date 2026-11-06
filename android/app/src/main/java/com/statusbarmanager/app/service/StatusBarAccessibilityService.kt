@@ -181,7 +181,12 @@ class StatusBarAccessibilityService : AccessibilityService() {
 
             // Step 2: Locate Notifications & Status Bar
             publish(AutomationStep.NAVIGATING_TO_NOTIFICATIONS_STATUS_BAR, "Navigating to Notifications & status bar...", 18, 2)
-            val reachedSection = navigateToNotificationsAndStatusBar()
+            var reachedSection = navigateToNotificationsAndStatusBar()
+            if (!reachedSection) {
+                scrollForward()
+                delay(500)
+                reachedSection = navigateToNotificationsAndStatusBar()
+            }
             if (!reachedSection) {
                 throw IllegalStateException(
                     "Could not find the Notifications / status bar settings entry on this device. " +
@@ -448,23 +453,32 @@ class StatusBarAccessibilityService : AccessibilityService() {
         startActivity(intent)
     }
 
-    private suspend fun navigateToNotificationsAndStatusBar(): Boolean =
-        navigateToSettingsEntry(
-            candidates = compatibilityManager.notificationsAndStatusBarLabels,
-            maxScrolls = 5
-        )
+    private fun navigateToNotificationsAndStatusBar(): Boolean {
+        val root = rootInActiveWindow ?: return false
+        val node = findNodeMatching(root, compatibilityManager.notificationsAndStatusBarLabels)
+        if (node != null) {
+            val clicked = clickNodeOrParent(node)
+            node.recycle()
+            return clicked
+        }
+        return false
+    }
 
-    private suspend fun navigateToStatusBarSection(): Boolean =
-        navigateToSettingsEntry(
-            candidates = compatibilityManager.statusBarSectionLabels,
-            maxScrolls = 8
-        )
+    private fun navigateToStatusBarSection(): Boolean {
+        val root = rootInActiveWindow ?: return false
+        val node = findNodeMatching(root, compatibilityManager.statusBarSectionLabels)
+        if (node != null) {
+            val clicked = clickNodeOrParent(node)
+            node.recycle()
+            return clicked
+        }
+        return false
+    }
 
     /**
-     * Settings layouts differ across OEMs and may load asynchronously. Search the
-     * visible accessibility tree repeatedly, prefer an actionable row over a static
-     * page heading, and scroll the actual scrollable container when necessary.
+     * Reads the actual current Time setting from Settings interface (not hardcoded!)
      */
+
     private suspend fun navigateToSettingsEntry(
         candidates: List<String>,
         maxScrolls: Int
@@ -555,28 +569,29 @@ class StatusBarAccessibilityService : AccessibilityService() {
      * Reads the actual current Time setting from Settings interface (not hardcoded!)
      */
     private suspend fun readActualCurrentTimeSetting(): String {
-        val timeNode = waitForMatchingNode(compatibilityManager.timeMenuLabels, attempts = 4)
-            ?: return StatusBarBackupModel.TIME_SHOW_HOURS_MINUTES
-        return try {
-            extractSummaryText(timeNode)?.trim()
-                ?.takeIf { it.isNotBlank() }
-                ?: StatusBarBackupModel.TIME_SHOW_HOURS_MINUTES
-        } finally {
+        val root = rootInActiveWindow ?: return StatusBarBackupModel.TIME_SHOW_HOURS_MINUTES
+        val timeNode = findNodeMatching(root, compatibilityManager.timeMenuLabels)
+        if (timeNode != null) {
+            val summary = extractSummaryText(timeNode)
             timeNode.recycle()
+            if (!summary.isNullOrBlank()) {
+                return summary.trim()
+            }
         }
+        return StatusBarBackupModel.TIME_SHOW_HOURS_MINUTES
     }
 
     private suspend fun handleTimeSetting(mode: TargetMode, detectedCurrentTime: String) {
-        val timeNode = waitForMatchingNode(compatibilityManager.timeMenuLabels)
-            ?: throw IllegalStateException("Could not find the Time display setting.")
+        val root = rootInActiveWindow ?: return
+        val timeNode = findNodeMatching(root, compatibilityManager.timeMenuLabels)
+            ?: throw IllegalStateException("Could not find the Time display setting on the Status bar page.")
 
-        val opened = try {
-            clickNodeOrParent(timeNode)
-        } finally {
-            timeNode.recycle()
-        }
-        if (!opened) throw IllegalStateException("Could not open the Time display setting.")
+        clickNodeOrParent(timeNode)
+        timeNode.recycle()
+        delay(700)
 
+        val dialogRoot = rootInActiveWindow
+            ?: throw IllegalStateException("Could not read the Time display options after opening Time.")
         val targetLabels = if (mode is TargetMode.HideAll || mode is TargetMode.BothEngage) {
             compatibilityManager.doNotShowLabels
         } else {
@@ -584,58 +599,39 @@ class StatusBarAccessibilityService : AccessibilityService() {
             listOf(backup?.originalTimeSetting ?: detectedCurrentTime)
         }
 
-        // Settings animations and OEM preference screens can take longer than one
-        // fixed delay. Reacquire the accessibility tree rather than using a stale root.
-        val targetOptionNode = waitForMatchingNode(targetLabels, attempts = 10, delayMs = 250)
-            ?: run {
-                performGlobalAction(GLOBAL_ACTION_BACK)
-                throw IllegalStateException(
-                    "The Time display options did not appear. Could not select: ${targetLabels.joinToString()}."
-                )
-            }
-
-        val selected = try {
+        val targetOptionNode = findNodeMatching(dialogRoot, targetLabels)
+        if (targetOptionNode != null) {
             clickNodeOrParent(targetOptionNode)
-        } finally {
             targetOptionNode.recycle()
+            Log.i(TAG, "Selected Time option: ${targetLabels.first()}")
+        } else {
+            Log.e(TAG, "Could not find Time dialog option for: $targetLabels")
+            // Dismiss dialog if not found
+            performGlobalAction(GLOBAL_ACTION_BACK)
+            throw IllegalStateException("Could not find the requested Time display option: $targetLabels")
         }
-        if (!selected) throw IllegalStateException("Could not select the requested Time display option.")
-        delay(500)
-        Log.i(TAG, "Selected Time option: ${targetLabels.first()}")
     }
 
     private suspend fun handleNetworkSpeedSetting(mode: TargetMode): Boolean {
-        // Preserve the original, working Settings interaction: locate the label,
-        // resolve the nearby row switch, and tap only when its current value differs.
-        val speedLabelNode = waitForMatchingNode(compatibilityManager.networkSpeedLabels)
-            ?: throw IllegalStateException("Could not find the real-time network speed setting.")
+        val root = rootInActiveWindow ?: return true
+        val speedLabelNode = findNodeMatching(root, compatibilityManager.networkSpeedLabels) ?: return true
 
-        val toggleNode = try {
-            findAssociatedCheckable(speedLabelNode)
-        } finally {
-            speedLabelNode.recycle()
-        } ?: throw IllegalStateException("Could not find the real-time network speed switch.")
-
-        val originalState = toggleNode.isChecked
-        val targetState = if (mode is TargetMode.HideAll || mode is TargetMode.BothEngage) {
-            false
-        } else {
-            backupManager.getExistingBackup()?.originalRealTimeNetworkSpeed ?: originalState
-        }
-
-        if (originalState != targetState) {
-            val changed = try {
-                clickNodeOrParent(toggleNode)
-            } finally {
-                toggleNode.recycle()
+        var originalState = true
+        val toggleNode = findAssociatedCheckable(speedLabelNode)
+        if (toggleNode != null) {
+            originalState = toggleNode.isChecked
+            val targetState = if (mode is TargetMode.HideAll || mode is TargetMode.BothEngage) false else {
+                backupManager.getExistingBackup()?.originalRealTimeNetworkSpeed ?: originalState
             }
-            if (!changed) throw IllegalStateException("Could not change the real-time network speed switch.")
-            delay(350)
-            Log.i(TAG, "Requested real-time network speed state: $targetState")
-        } else {
+
+            if (toggleNode.isChecked != targetState) {
+                clickNodeOrParent(toggleNode)
+                Log.i(TAG, "Toggled real-time network speed from ${toggleNode.isChecked} to $targetState")
+                delay(300)
+            }
             toggleNode.recycle()
-            Log.i(TAG, "Real-time network speed already has the requested state: $targetState")
         }
+        speedLabelNode.recycle()
         return originalState
     }
 
@@ -1003,31 +999,22 @@ class StatusBarAccessibilityService : AccessibilityService() {
      * as "Screen timeout".
      */
     private fun findNodeMatching(root: AccessibilityNodeInfo, candidates: List<String>): AccessibilityNodeInfo? {
-        val normalizedCandidates = candidates.map { it.trim() }.filter { it.isNotEmpty() }
         val queue = ArrayDeque<AccessibilityNodeInfo>()
         queue.add(root)
 
         while (queue.isNotEmpty()) {
             val current = queue.removeFirst()
-            val values = listOfNotNull(
-                current.text?.toString()?.trim(),
-                current.contentDescription?.toString()?.trim()
-            ).filter { it.isNotEmpty() }
+            val text = current.text
+            val desc = current.contentDescription
 
-            val matches = values.any { value ->
-                normalizedCandidates.any { candidate ->
-                    compatibilityManager.matchesSettingsLabel(value, candidate)
-                }
-            }
-            if (matches) {
-                while (queue.isNotEmpty()) queue.removeFirst().recycle()
+            if (compatibilityManager.matchesAny(text, candidates) || compatibilityManager.matchesAny(desc, candidates)) {
                 return current
             }
 
             for (i in 0 until current.childCount) {
-                current.getChild(i)?.let { queue.add(it) }
+                val child = current.getChild(i)
+                if (child != null) queue.add(child)
             }
-            if (current !== root) current.recycle()
         }
         return null
     }
