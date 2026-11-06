@@ -384,16 +384,31 @@ class StatusBarAccessibilityService : AccessibilityService() {
         )
         delay(600)
 
-        if (isHideMode || isForceStopMode) {
+        if (shouldPersistStatusBarHidden(mode)) {
+            // Only a status-bar engagement (or the combined mode) may change the
+            // persistent Hush Button state. App-only force stop is a one-shot action.
             dataStoreRepository.setHideActive(active = true, isPartial = isPartial)
-            val logMsg = when {
-                engageMode == EngageMode.FORCE_STOP_APPS_ONLY ->
-                    "Force stop completed: ${currentAppStats.successfullyStopped} stopped, ${currentAppStats.alreadyStopped} already off"
-                isPartial ->
-                    "Engaged with partial result: System-managed headphone or restricted apps reported accurately"
-                else ->
-                    "Status bar hidden and eligible applications force-stopped successfully"
+            val logMsg = if (isPartial) {
+                "Status bar changes were applied with partial results; check the app and icon details."
+            } else {
+                "Status bar hidden successfully; eligible applications were also force-stopped when combined mode was selected."
             }
+            dataStoreRepository.recordOperation(if (isPartial) "PARTIAL" else "SUCCESS", logMsg)
+            updateChecklist("verify", StepStatus.COMPLETED)
+            publish(
+                if (isPartial) AutomationStep.PARTIAL else AutomationStep.COMPLETED,
+                logMsg,
+                100,
+                7,
+                iconStats = stats,
+                appStats = currentAppStats,
+                headphoneStatus = headphoneStatusText,
+                isPartial = isPartial
+            )
+        } else if (isForceStopMode) {
+            // Do not set or clear IS_HIDE_ACTIVE here. The action stops apps once;
+            // it must neither switch Hush Button on nor disturb an active status bar.
+            val logMsg = "Force stop completed: ${currentAppStats.successfullyStopped} stopped, ${currentAppStats.alreadyStopped} already off, ${currentAppStats.failed} failed."
             dataStoreRepository.recordOperation(if (isPartial) "PARTIAL" else "SUCCESS", logMsg)
             updateChecklist("verify", StepStatus.COMPLETED)
             publish(
@@ -991,8 +1006,6 @@ class StatusBarAccessibilityService : AccessibilityService() {
         val normalizedCandidates = candidates.map { it.trim() }.filter { it.isNotEmpty() }
         val queue = ArrayDeque<AccessibilityNodeInfo>()
         queue.add(root)
-        var bestPrefixMatch: AccessibilityNodeInfo? = null
-        var bestLongContainsMatch: AccessibilityNodeInfo? = null
 
         while (queue.isNotEmpty()) {
             val current = queue.removeFirst()
@@ -1001,38 +1014,22 @@ class StatusBarAccessibilityService : AccessibilityService() {
                 current.contentDescription?.toString()?.trim()
             ).filter { it.isNotEmpty() }
 
-            if (values.any { value ->
-                normalizedCandidates.any { candidate -> candidate.equals(value, ignoreCase = true) }
-            }) {
-                bestPrefixMatch?.recycle()
-                bestLongContainsMatch?.recycle()
+            val matches = values.any { value ->
+                normalizedCandidates.any { candidate ->
+                    compatibilityManager.matchesSettingsLabel(value, candidate)
+                }
+            }
+            if (matches) {
                 while (queue.isNotEmpty()) queue.removeFirst().recycle()
                 return current
-            }
-
-            if (bestPrefixMatch == null && values.any { value ->
-                normalizedCandidates.any { candidate ->
-                    value.startsWith(candidate, ignoreCase = true)
-                }
-            }) {
-                bestPrefixMatch = current
-            } else if (bestLongContainsMatch == null && values.any { value ->
-                normalizedCandidates.any { candidate ->
-                    candidate.length >= 6 && value.contains(candidate, ignoreCase = true)
-                }
-            }) {
-                bestLongContainsMatch = current
-            } else if (current !== root) {
-                current.recycle()
             }
 
             for (i in 0 until current.childCount) {
                 current.getChild(i)?.let { queue.add(it) }
             }
+            if (current !== root) current.recycle()
         }
-
-        bestLongContainsMatch?.takeIf { it !== bestPrefixMatch }?.recycle()
-        return bestPrefixMatch ?: bestLongContainsMatch
+        return null
     }
 
     private fun clickNodeOrParent(node: AccessibilityNodeInfo): Boolean {
