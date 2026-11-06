@@ -24,6 +24,10 @@ sealed class TargetMode {
     object BothDisengage : TargetMode()
 }
 
+/** Whether a completed operation should mark the persistent status bar as hidden. */
+internal fun shouldPersistStatusBarHidden(mode: TargetMode): Boolean =
+    mode is TargetMode.HideAll || mode is TargetMode.BothEngage
+
 enum class AutomationStep {
     IDLE,
     STARTING,
