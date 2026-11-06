@@ -30,7 +30,6 @@ fun MainScreen(
     hasBackup: Boolean,
     backupModel: StatusBarBackupModel?,
     isAccessibilityGranted: Boolean,
-    isOverlayGranted: Boolean,
     activeEngagementMode: EngageMode?,
     lastOperation: Triple<String, String, Long>,
     automationProgress: AutomationProgress,
@@ -41,7 +40,6 @@ fun MainScreen(
     onToggleMasterSwitch: (Boolean) -> Unit,
     onRestoreOriginal: () -> Unit,
     onRequestAccessibilityPermission: () -> Unit,
-    onRequestOverlayPermission: () -> Unit,
     onOpenSystemSettings: () -> Unit,
     onViewBackupDetails: () -> Unit,
     onToggleStatusBarOnly: () -> Unit,
@@ -134,7 +132,6 @@ fun MainScreen(
                 hasBackup = hasBackup,
                 isPartial = backupModel?.isPartial ?: false,
                 isAccessibilityGranted = isAccessibilityGranted,
-                isOverlayGranted = isOverlayGranted,
                 headphoneStatus = automationProgress.headphoneStatus
             )
 
@@ -144,11 +141,6 @@ fun MainScreen(
                 onModeSelected = onSelectEngageMode,
                 onManageWhitelist = onOpenWhitelist
             )
-
-            // Floating Overlay Permission Card (Display over other apps)
-            if (!isOverlayGranted) {
-                OverlayPermissionCard(onRequestPermission = onRequestOverlayPermission)
-            }
 
             // Backup & Restoration Card (Objective 4)
             BackupStatusCard(
@@ -168,8 +160,7 @@ fun MainScreen(
             // Manual Assistance & Settings Quick Actions
             ManualAssistanceCard(
                 onOpenSettings = onOpenSystemSettings,
-                onRequestAccessibility = onRequestAccessibilityPermission,
-                onRequestOverlay = onRequestOverlayPermission
+                onRequestAccessibility = onRequestAccessibilityPermission
             )
 
             Spacer(modifier = Modifier.height(24.dp))
@@ -549,7 +540,6 @@ fun StatusOverviewCard(
     hasBackup: Boolean,
     isPartial: Boolean,
     isAccessibilityGranted: Boolean,
-    isOverlayGranted: Boolean,
     headphoneStatus: String
 ) {
     Card(
@@ -593,12 +583,6 @@ fun StatusOverviewCard(
                     modifier = Modifier.weight(1f)
                 )
 
-                // Floating Overlay Pill
-                StatusPill(
-                    label = "Progress Window",
-                    value = if (isOverlayGranted) "Enabled" to SuccessGreen else "Disabled" to TextMuted,
-                    modifier = Modifier.weight(1f)
-                )
             }
 
             // Wired Headphone Limitation Note (Objective 2)
@@ -676,54 +660,6 @@ fun StatusPill(
     modifier: Modifier = Modifier
 ) {
     StatusPill(label = label, value = value to color, modifier = modifier)
-}
-
-@Composable
-fun OverlayPermissionCard(onRequestPermission: () -> Unit) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .border(1.dp, BlueAccent.copy(alpha = 0.4f), RoundedCornerShape(16.dp)),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = DarkSurfaceElevated)
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(14.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(
-                imageVector = Icons.Default.Layers,
-                contentDescription = null,
-                tint = BlueAccent,
-                modifier = Modifier.size(24.dp)
-            )
-            Spacer(modifier = Modifier.width(12.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = "Full-screen Progress Window",
-                    style = MaterialTheme.typography.titleSmall.copy(
-                        fontWeight = FontWeight.Bold,
-                        color = TextPrimary
-                    )
-                )
-                Text(
-                    text = "Covers the Settings screens while SysHush runs and shows only overall progress.",
-                    style = MaterialTheme.typography.bodySmall.copy(color = TextSecondary, fontSize = 11.sp)
-                )
-            }
-            Spacer(modifier = Modifier.width(8.dp))
-            Button(
-                onClick = onRequestPermission,
-                shape = RoundedCornerShape(8.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = BluePrimary),
-                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
-            ) {
-                Text("Enable", color = Color.White, fontSize = 12.sp)
-            }
-        }
-    }
 }
 
 @Composable
@@ -887,8 +823,7 @@ fun AccessibilityBanner(onRequestPermission: () -> Unit) {
 @Composable
 fun ManualAssistanceCard(
     onOpenSettings: () -> Unit,
-    onRequestAccessibility: () -> Unit,
-    onRequestOverlay: () -> Unit
+    onRequestAccessibility: () -> Unit
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -929,13 +864,6 @@ fun ManualAssistanceCard(
                     Text("Accessibility", color = TextPrimary)
                 }
 
-                OutlinedButton(
-                    onClick = onRequestOverlay,
-                    modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(10.dp)
-                ) {
-                    Text("Overlay", color = TextPrimary)
-                }
             }
         }
     }
