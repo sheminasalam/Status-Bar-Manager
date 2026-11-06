@@ -13,7 +13,6 @@ import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
 
-    private var overlayAccessGranted by mutableStateOf(false)
     private var accessibilityAccessGranted by mutableStateOf(false)
 
     private lateinit var dataStoreRepository: DataStoreRepository
@@ -31,11 +30,7 @@ class MainActivity : ComponentActivity() {
         automationManager = SettingsAutomationManager(applicationContext)
         coordinator = OperationCoordinator(applicationContext, dataStoreRepository, backupManager)
         applicationManager = ApplicationManager(applicationContext)
-        overlayAccessGranted = automationManager.canDrawOverlays()
         accessibilityAccessGranted = automationManager.isAccessibilityPermissionGranted()
-        if (intent.getBooleanExtra("prompt_overlay", false) && !overlayAccessGranted) {
-            automationManager.openOverlaySettings()
-        }
 
         setContent {
             StatusBarManagerTheme {
@@ -52,7 +47,6 @@ class MainActivity : ComponentActivity() {
                 )
 
                 val isAccessibilityGranted = accessibilityAccessGranted
-                val isOverlayGranted = overlayAccessGranted
 
                 var showOnboardingDialog by remember {
                     mutableStateOf(intent.getBooleanExtra("prompt_accessibility", false))
@@ -94,7 +88,6 @@ class MainActivity : ComponentActivity() {
                         hasBackup = hasBackup,
                         backupModel = backupModel,
                         isAccessibilityGranted = isAccessibilityGranted,
-                        isOverlayGranted = isOverlayGranted,
                         lastOperation = lastOperation,
                         automationProgress = automationProgress,
                         compatibilityManager = compatibilityManager,
@@ -115,10 +108,6 @@ class MainActivity : ComponentActivity() {
                             }
 
                             if (shouldEngage) {
-                                if (!automationManager.canDrawOverlays()) {
-                                    automationManager.openOverlaySettings()
-                                    return@MainScreen
-                                }
                                 coroutineScope.launch { coordinator.engage() }
                             } else {
                                 coroutineScope.launch { coordinator.disengage() }
@@ -129,17 +118,10 @@ class MainActivity : ComponentActivity() {
                                 showOnboardingDialog = true
                                 return@MainScreen
                             }
-                            if (!automationManager.canDrawOverlays()) {
-                                automationManager.openOverlaySettings()
-                                return@MainScreen
-                            }
                             coroutineScope.launch { coordinator.disengage() }
                         },
                         onRequestAccessibilityPermission = {
                             automationManager.openAccessibilitySettings()
-                        },
-                        onRequestOverlayPermission = {
-                            automationManager.openOverlaySettings()
                         },
                         onOpenSystemSettings = {
                             automationManager.openSystemSettings()
@@ -150,8 +132,6 @@ class MainActivity : ComponentActivity() {
                         onToggleStatusBarOnly = {
                             if (!isAccessibilityGranted) {
                                 showOnboardingDialog = true
-                            } else if (!automationManager.canDrawOverlays()) {
-                                automationManager.openOverlaySettings()
                             } else {
                                 coroutineScope.launch { coordinator.toggleStatusBarOnly() }
                             }
@@ -159,8 +139,6 @@ class MainActivity : ComponentActivity() {
                         onStopAppsOnly = {
                             if (!isAccessibilityGranted) {
                                 showOnboardingDialog = true
-                            } else if (!automationManager.canDrawOverlays()) {
-                                automationManager.openOverlaySettings()
                             } else {
                                 coroutineScope.launch { coordinator.forceStopAppsOnly() }
                             }
@@ -191,7 +169,6 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         if (::applicationManager.isInitialized) {
-            overlayAccessGranted = automationManager.canDrawOverlays()
             accessibilityAccessGranted = automationManager.isAccessibilityPermissionGranted()
         }
     }
