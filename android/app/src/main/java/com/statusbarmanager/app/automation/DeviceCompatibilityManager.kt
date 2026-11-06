@@ -104,6 +104,21 @@ class DeviceCompatibilityManager {
     )
 
     /**
+     * Match a Settings label as a complete word or phrase. This deliberately
+     * permits labels such as "Show time" to match the candidate "Time", while
+     * preventing the same short candidate from matching "Screen timeout".
+     */
+    fun matchesSettingsLabel(value: String, candidate: String): Boolean {
+        val actual = value.trim()
+        val expected = candidate.trim()
+        if (actual.isEmpty() || expected.isEmpty()) return false
+        return Regex(
+            """(?<![\\p{L}\\p{N}])${Regex.escape(expected)}(?![\\p{L}\\p{N}])""",
+            RegexOption.IGNORE_CASE
+        ).containsMatchIn(actual)
+    }
+
+    /**
      * Strict safety check: Never toggle the battery percentage display option!
      * The screenshot and specification explicitly demand differentiating between
      * the actual battery icon vs. the separate "Show battery percentage" setting.
