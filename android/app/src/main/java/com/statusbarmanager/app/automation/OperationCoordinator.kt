@@ -45,8 +45,13 @@ class OperationCoordinator(
 
         val mode = dataStoreRepository.getEngageMode()
         Log.i(TAG, "Initiating Engage with mode: $mode")
-        // Persist the actual mode used for active engagement
-        dataStoreRepository.setActiveEngagementMode(mode)
+        // Only status-bar modes create a persistent engagement. App-only
+        // force stop is a one-shot action and must leave Hush Button state unchanged.
+        if (mode == EngageMode.FORCE_STOP_APPS_ONLY) {
+            dataStoreRepository.clearActiveEngagementMode()
+        } else {
+            dataStoreRepository.setActiveEngagementMode(mode)
+        }
 
         val targetMode = when (mode) {
             EngageMode.STATUS_BAR_ONLY -> TargetMode.HideAll
@@ -89,12 +94,8 @@ class OperationCoordinator(
             Log.e(TAG, "Cannot stop running apps: accessibility service is unavailable")
             return false
         }
-        // A dedicated Stop Apps widget action must not overwrite an already-active
-        // status-bar mode. Otherwise the later Hush Button disengage would forget
-        // that it needs to restore the user's saved status-bar configuration.
-        if (dataStoreRepository.getActiveEngagementMode() == null) {
-            dataStoreRepository.setActiveEngagementMode(EngageMode.FORCE_STOP_APPS_ONLY)
-        }
+        // A dedicated Stop Apps action is one-shot. Keep any existing
+        // status-bar engagement untouched, and do not create a fake active mode.
         service.startAutomation(TargetMode.ForceStopOnly)
         StatusBarWidgetProvider.updateAllWidgets(context)
         return true
