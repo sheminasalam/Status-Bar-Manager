@@ -3,6 +3,7 @@ package com.statusbarmanager.app.service
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
 import android.content.Intent
+import android.content.pm.ApplicationInfo
 import android.graphics.Path
 import android.graphics.Rect
 import android.provider.Settings
@@ -81,7 +82,7 @@ class StatusBarAccessibilityService : AccessibilityService() {
         cancelAutomation("Accessibility service was interrupted by system.")
     }
 
-    fun startAutomation(mode: TargetMode) {
+    fun startAutomation(mode: TargetMode, returnToHome: Boolean = false) {
         if (isAutomationRunning) {
             Log.w(TAG, "Automation is already running.")
             return
@@ -92,19 +93,19 @@ class StatusBarAccessibilityService : AccessibilityService() {
 
         currentAutomationJob = serviceScope.launch {
             try {
-                executeWorkflow(mode)
+                executeWorkflow(mode, returnToHome)
             } catch (e: CancellationException) {
                 Log.i(TAG, "Automation cancelled.")
             } catch (e: Exception) {
                 Log.e(TAG, "Automation error: ${e.message}", e)
-                handleAutomationFailure("Error: ${e.localizedMessage ?: "Unknown failure"}")
+                handleAutomationFailure("Error: ${e.localizedMessage ?: "Unknown failure"}", returnToHome)
             } finally {
                 isAutomationRunning = false
             }
         }
     }
 
-    private suspend fun executeWorkflow(mode: TargetMode) = withContext(Dispatchers.Default) {
+    private suspend fun executeWorkflow(mode: TargetMode, returnToHome: Boolean = false) = withContext(Dispatchers.Default) {
         val appManager = ApplicationManager(applicationContext)
         val forceStopController = AppForceStopAccessibilityController(applicationContext, this@StatusBarAccessibilityService)
         val userWhitelist = dataStoreRepository.getWhitelist()
@@ -164,7 +165,7 @@ class StatusBarAccessibilityService : AccessibilityService() {
         }
 
         publish(AutomationStep.STARTING, "Preparing automation environment...", 5, 0)
-        delay(400)
+        delay(100)
 
         // ----------------------------------------------------
         // PHASE 1: STATUS BAR AUTOMATION (if applicable)
@@ -177,12 +178,12 @@ class StatusBarAccessibilityService : AccessibilityService() {
             // Step 1: Open Settings
             publish(AutomationStep.OPENING_SETTINGS, "Opening phone Settings...", 12, 1)
             launchSettings()
-            waitForSettingsWindow(timeoutMs = 4000)
+            waitForSettingsWindow(timeoutMs = 2500)
 
             // Step 2: Locate Notifications & Status Bar
             publish(AutomationStep.NAVIGATING_TO_NOTIFICATIONS_STATUS_BAR, "Navigating to Notifications & status bar...", 18, 2)
             val reachedSection = navigateToNotificationsAndStatusBarWithRetry()
-            delay(500)
+            delay(120)
 
             // Step 3: Enter Status Bar section
             publish(AutomationStep.NAVIGATING_TO_STATUS_BAR, "Opening Status bar settings...", 26, 3)
@@ -190,113 +191,114 @@ class StatusBarAccessibilityService : AccessibilityService() {
             if (!inStatusBar && !reachedSection) {
                 Log.w(TAG, "Status bar section not confirmed automatically; attempting to proceed on current screen")
             }
-            delay(600)
+            delay(120)
 
-        // Step 4: Baseline backup & Time display handling
-        updateChecklist("backup", StepStatus.IN_PROGRESS)
-        updateChecklist("time", StepStatus.IN_PROGRESS)
-        publish(AutomationStep.READING_BASELINE_SETTINGS, "Reading current Time display setting...", 34, 4)
+            // Step 4: Baseline backup & Time display handling
+            updateChecklist("backup", StepStatus.IN_PROGRESS)
+            updateChecklist("time", StepStatus.IN_PROGRESS)
+            publish(AutomationStep.READING_BASELINE_SETTINGS, "Reading current Time display setting...", 34, 4)
 
-        val actualCurrentTime = readActualCurrentTimeSetting()
-        Log.i(TAG, "Actual current Time setting detected: '$actualCurrentTime'")
+            val actualCurrentTime = readActualCurrentTimeSetting()
+            Log.i(TAG, "Actual current Time setting detected: '$actualCurrentTime'")
 
-        // Configure Time display
-        publish(AutomationStep.CONFIGURING_TIME, if (isHideMode) "Setting Time to 'Do not show'..." else "Restoring original Time...", 40, 4)
-        handleTimeSetting(mode, actualCurrentTime)
-        updateChecklist("time", StepStatus.COMPLETED, if (isHideMode) "Set to Do not show" else "Restored: $actualCurrentTime")
-        delay(600)
+            // Configure Time display
+            publish(AutomationStep.CONFIGURING_TIME, if (isHideMode) "Setting Time to 'Do not show'..." else "Restoring original Time...", 40, 4)
+            handleTimeSetting(mode, actualCurrentTime)
+            updateChecklist("time", StepStatus.COMPLETED, if (isHideMode) "Set to Do not show" else "Restored: $actualCurrentTime")
+            delay(120)
 
-        // Configure Battery style (hides battery icon if supported by OEM)
-        handleBatteryStyleSetting(mode)
-        delay(500)
+            // Configure Battery style (hides battery icon if supported by OEM)
+            handleBatteryStyleSetting(mode)
+            delay(100)
 
-        // Step 5: Network speed toggle
-        updateChecklist("speed", StepStatus.IN_PROGRESS)
-        publish(AutomationStep.CONFIGURING_NETWORK_SPEED, "Checking Real-time network speed...", 46, 5)
-        val actualNetworkSpeed = handleNetworkSpeedSetting(mode)
-        updateChecklist("speed", StepStatus.COMPLETED, if (isHideMode) "Disabled" else "Restored")
-        delay(700)
+            // Step 5: Network speed toggle
+            updateChecklist("speed", StepStatus.IN_PROGRESS)
+            publish(AutomationStep.CONFIGURING_NETWORK_SPEED, "Checking Real-time network speed...", 46, 5)
+            val actualNetworkSpeed = handleNetworkSpeedSetting(mode)
+            updateChecklist("speed", StepStatus.COMPLETED, if (isHideMode) "Disabled" else "Restored")
+            delay(120)
 
-        // Step 6: Comprehensive Status Icons Discovery & Toggle
-        updateChecklist("scan_icons", StepStatus.IN_PROGRESS)
-        publish(AutomationStep.NAVIGATING_TO_STATUS_ICONS, "Accessing Status icons submenu...", 52, 6)
+            // Step 6: Comprehensive Status Icons Discovery & Toggle
+            updateChecklist("scan_icons", StepStatus.IN_PROGRESS)
+            publish(AutomationStep.NAVIGATING_TO_STATUS_ICONS, "Accessing Status icons submenu...", 52, 6)
 
-        val navigatedToIcons = navigateIntoStatusIconsSubmenu()
-        delay(800)
+            val navigatedToIcons = navigateIntoStatusIconsSubmenu()
+            delay(120)
 
-        publish(AutomationStep.DISCOVERING_ALL_STATUS_ICONS, "Discovering all available status icons...", 58, 6)
-        // Dynamically discover all checkable switch rows with scrolling
-        val discoveredIconsMap = discoverAllStatusIconRows()
-        Log.i(TAG, "Total status icons dynamically discovered: ${discoveredIconsMap.size} -> ${discoveredIconsMap.keys}")
+            publish(AutomationStep.DISCOVERING_ALL_STATUS_ICONS, "Discovering all available status icons...", 58, 6)
+            // Dynamically discover all checkable switch rows with scrolling
+            val discoveredIconsMap = discoverAllStatusIconRows()
+            Log.i(TAG, "Total status icons dynamically discovered: ${discoveredIconsMap.size} -> ${discoveredIconsMap.keys}")
 
-        val discoveredCount = discoveredIconsMap.size
-        val alreadyDisabledCount = discoveredIconsMap.values.count { !it }
-        stats = IconStats(
-            discovered = discoveredCount,
-            disabled = 0,
-            alreadyDisabled = alreadyDisabledCount,
-            restored = 0,
-            remaining = if (isHideMode) (discoveredCount - alreadyDisabledCount) else discoveredCount
-        )
-        updateChecklist("scan_icons", StepStatus.COMPLETED, "$discoveredCount icons discovered")
-        publish(AutomationStep.DISCOVERING_ALL_STATUS_ICONS, "Discovered $discoveredCount status icons", 65, 6, iconStats = stats)
+            val discoveredCount = discoveredIconsMap.size
+            val alreadyDisabledCount = discoveredIconsMap.values.count { !it }
+            stats = IconStats(
+                discovered = discoveredCount,
+                disabled = 0,
+                alreadyDisabled = alreadyDisabledCount,
+                restored = 0,
+                remaining = if (isHideMode) (discoveredCount - alreadyDisabledCount) else discoveredCount
+            )
+            updateChecklist("scan_icons", StepStatus.COMPLETED, "$discoveredCount icons discovered")
+            publish(AutomationStep.DISCOVERING_ALL_STATUS_ICONS, "Discovered $discoveredCount status icons", 65, 6, iconStats = stats)
 
-        // Save baseline BEFORE changing any icons if hide mode and no backup exists
-        if (isHideMode) {
-            val existing = backupManager.getExistingBackup()
-            if (existing == null) {
-                backupManager.saveBackupIfNotActive(
-                    timeSetting = actualCurrentTime,
-                    networkSpeed = actualNetworkSpeed,
-                    icons = discoveredIconsMap
-                )
-                updateChecklist("backup", StepStatus.COMPLETED, "Baseline snapshot preserved")
+            // Save baseline BEFORE changing any icons if hide mode and no backup exists
+            if (isHideMode) {
+                val existing = backupManager.getExistingBackup()
+                if (existing == null) {
+                    backupManager.saveBackupIfNotActive(
+                        timeSetting = actualCurrentTime,
+                        networkSpeed = actualNetworkSpeed,
+                        icons = discoveredIconsMap
+                    )
+                    updateChecklist("backup", StepStatus.COMPLETED, "Baseline snapshot preserved")
+                } else {
+                    updateChecklist("backup", StepStatus.COMPLETED, "Existing baseline protected")
+                }
+            }
+
+            // Toggle / Restore icons
+            updateChecklist("toggle_icons", StepStatus.IN_PROGRESS)
+            if (isHideMode) {
+                publish(AutomationStep.DISABLING_ALL_STATUS_ICONS, "Disabling all active status icons...", 70, 6, iconStats = stats)
+                stats = disableAllActiveStatusIcons(discoveredIconsMap) { updatedStats, currentLabel ->
+                    stats = updatedStats
+                    val pct = 70 + (20 * updatedStats.disabled / maxOf(1, updatedStats.discovered - updatedStats.alreadyDisabled))
+                    publish(
+                        AutomationStep.DISABLING_ALL_STATUS_ICONS,
+                        "Disabling '$currentLabel' (${updatedStats.disabled}/${updatedStats.discovered - updatedStats.alreadyDisabled})...",
+                        minOf(90, pct),
+                        6,
+                        iconStats = updatedStats
+                    )
+                }
+                updateChecklist("toggle_icons", StepStatus.COMPLETED, "${stats.disabled} icons turned OFF, ${stats.alreadyDisabled} already OFF")
             } else {
-                updateChecklist("backup", StepStatus.COMPLETED, "Existing baseline protected")
+                publish(AutomationStep.RESTORING_ALL_STATUS_ICONS, "Restoring icons to original states...", 70, 6, iconStats = stats)
+                val originalBackup = backupManager.getExistingBackup()
+                val targetMap = originalBackup?.originalStatusIcons ?: discoveredIconsMap
+                stats = restoreAllStatusIconsToBaseline(targetMap) { updatedStats, currentLabel ->
+                    stats = updatedStats
+                    val pct = 70 + (20 * updatedStats.restored / maxOf(1, updatedStats.discovered))
+                    publish(
+                        AutomationStep.RESTORING_ALL_STATUS_ICONS,
+                        "Restoring '$currentLabel' (${updatedStats.restored}/${updatedStats.discovered})...",
+                        minOf(90, pct),
+                        6,
+                        iconStats = updatedStats
+                    )
+                }
+                updateChecklist("toggle_icons", StepStatus.COMPLETED, "${stats.restored} icons restored to exact baseline")
+            }
+
+            // Return from Status icons submenu if entered
+            if (navigatedToIcons) {
+                performGlobalAction(GLOBAL_ACTION_BACK)
+                delay(120)
             }
         }
 
-        // Toggle / Restore icons
-        updateChecklist("toggle_icons", StepStatus.IN_PROGRESS)
-        if (isHideMode) {
-            publish(AutomationStep.DISABLING_ALL_STATUS_ICONS, "Disabling all active status icons...", 70, 6, iconStats = stats)
-            stats = disableAllActiveStatusIcons(discoveredIconsMap) { updatedStats, currentLabel ->
-                stats = updatedStats
-                val pct = 70 + (20 * updatedStats.disabled / maxOf(1, updatedStats.discovered - updatedStats.alreadyDisabled))
-                publish(
-                    AutomationStep.DISABLING_ALL_STATUS_ICONS,
-                    "Disabling '$currentLabel' (${updatedStats.disabled}/${updatedStats.discovered - updatedStats.alreadyDisabled})...",
-                    minOf(90, pct),
-                    6,
-                    iconStats = updatedStats
-                )
-            }
-            updateChecklist("toggle_icons", StepStatus.COMPLETED, "${stats.disabled} icons turned OFF, ${stats.alreadyDisabled} already OFF")
-        } else {
-            publish(AutomationStep.RESTORING_ALL_STATUS_ICONS, "Restoring icons to original states...", 70, 6, iconStats = stats)
-            val originalBackup = backupManager.getExistingBackup()
-            val targetMap = originalBackup?.originalStatusIcons ?: discoveredIconsMap
-            stats = restoreAllStatusIconsToBaseline(targetMap) { updatedStats, currentLabel ->
-                stats = updatedStats
-                val pct = 70 + (20 * updatedStats.restored / maxOf(1, updatedStats.discovered))
-                publish(
-                    AutomationStep.RESTORING_ALL_STATUS_ICONS,
-                    "Restoring '$currentLabel' (${updatedStats.restored}/${updatedStats.discovered})...",
-                    minOf(90, pct),
-                    6,
-                    iconStats = updatedStats
-                )
-            }
-            updateChecklist("toggle_icons", StepStatus.COMPLETED, "${stats.restored} icons restored to exact baseline")
-        }
-
-        // Return from Status icons submenu if entered
-        if (navigatedToIcons) {
-            performGlobalAction(GLOBAL_ACTION_BACK)
-            delay(600)
-        }
-        }
-
+        // ----------------------------------------------------
         // PHASE 2: APPLICATION FORCE STOP AUTOMATION (if applicable)
         // ----------------------------------------------------
         if (isForceStopMode) {
@@ -314,16 +316,11 @@ class StatusBarAccessibilityService : AccessibilityService() {
             )
 
             if (eligibleApps.isNotEmpty()) {
-                var stoppedCount = 0
-                var alreadyStoppedCount = 0
-                var failedCount = 0
-
                 updateChecklist("force_stop", StepStatus.IN_PROGRESS)
 
-                val pendingRetryApps = mutableListOf<AppItem>()
-
+                // Pass 1: Primary force stop pass across all eligible apps
                 eligibleApps.forEachIndexed { idx, app ->
-                    val appProgressPercent = 60 + ((idx + 1) * 30 / eligibleApps.size)
+                    val appProgressPercent = 60 + ((idx + 1) * 20 / eligibleApps.size)
                     currentAppStats = currentAppStats.copy(
                         currentAppName = app.appName,
                         remaining = eligibleApps.size - idx
@@ -338,66 +335,71 @@ class StatusBarAccessibilityService : AccessibilityService() {
                         appStats = currentAppStats
                     )
 
-                    val result = forceStopController.forceStopApp(app)
-                    when (result) {
-                        ForceStopResult.SUCCESSFULLY_STOPPED -> {
-                            stoppedCount++
-                            currentAppStats = currentAppStats.copy(successfullyStopped = stoppedCount)
-                        }
-                        ForceStopResult.ALREADY_STOPPED -> {
-                            alreadyStoppedCount++
-                            currentAppStats = currentAppStats.copy(alreadyStopped = alreadyStoppedCount)
-                        }
-                        ForceStopResult.FAILED_OPENING_SETTINGS,
-                        ForceStopResult.FAILED_CONFIRMATION,
-                        ForceStopResult.UNAVAILABLE_OR_DISABLED -> {
-                            pendingRetryApps.add(app)
-                            failedCount++
-                            currentAppStats = currentAppStats.copy(failed = failedCount)
-                        }
-                        else -> { }
-                    }
-                    delay(300)
+                    forceStopController.forceStopApp(app)
+                    delay(80)
                 }
 
-                // Automatic Pass 2: Retry any applications that failed on the first attempt
+                // Verify Ground Truth via ApplicationInfo.FLAG_STOPPED:
+                // Any app where (flags and FLAG_STOPPED) == 0 is STILL RUNNING!
+                val pendingRetryApps = eligibleApps.filter { app ->
+                    !isAppStopped(app.packageName)
+                }
+
+                // Automatic Pass 2: Retry any applications that are still running after Pass 1
                 if (pendingRetryApps.isNotEmpty()) {
-                    Log.i(TAG, "Executing automatic retry pass for ${pendingRetryApps.size} apps...")
-                    delay(500)
-                    val retryList = pendingRetryApps.toList()
-                    retryList.forEachIndexed { rIdx, app ->
+                    Log.i(TAG, "Pass 1 complete. ${pendingRetryApps.size} apps remain running. Executing Pass 2...")
+                    delay(120)
+                    pendingRetryApps.forEachIndexed { rIdx, app ->
                         publish(
                             AutomationStep.FORCE_STOPPING_APPS,
-                            "Retrying ${app.appName} (${rIdx + 1}/${retryList.size})...",
-                            92 + ((rIdx + 1) * 5 / retryList.size),
+                            "Retrying ${app.appName} (Pass 2: ${rIdx + 1}/${pendingRetryApps.size})...",
+                            82 + ((rIdx + 1) * 8 / pendingRetryApps.size),
                             6,
                             iconStats = stats,
                             appStats = currentAppStats
                         )
-                        val retryResult = forceStopController.forceStopApp(app)
-                        if (retryResult == ForceStopResult.SUCCESSFULLY_STOPPED) {
-                            stoppedCount++
-                            failedCount = maxOf(0, failedCount - 1)
-                            currentAppStats = currentAppStats.copy(
-                                successfullyStopped = stoppedCount,
-                                failed = failedCount
-                            )
-                        } else if (retryResult == ForceStopResult.ALREADY_STOPPED) {
-                            alreadyStoppedCount++
-                            failedCount = maxOf(0, failedCount - 1)
-                            currentAppStats = currentAppStats.copy(
-                                alreadyStopped = alreadyStoppedCount,
-                                failed = failedCount
-                            )
-                        }
-                        delay(300)
+                        forceStopController.forceStopApp(app)
+                        delay(80)
                     }
                 }
 
+                // Final Pass 3 for any remaining stubborn apps
+                val finalUnstopped = eligibleApps.filter { app ->
+                    !isAppStopped(app.packageName)
+                }
+                if (finalUnstopped.isNotEmpty()) {
+                    Log.i(TAG, "Pass 2 complete. ${finalUnstopped.size} apps remain. Executing final Pass 3...")
+                    delay(120)
+                    finalUnstopped.forEachIndexed { rIdx, app ->
+                        publish(
+                            AutomationStep.FORCE_STOPPING_APPS,
+                            "Final check ${app.appName} (${rIdx + 1}/${finalUnstopped.size})...",
+                            92 + ((rIdx + 1) * 4 / finalUnstopped.size),
+                            6,
+                            iconStats = stats,
+                            appStats = currentAppStats
+                        )
+                        forceStopController.forceStopApp(app)
+                        delay(80)
+                    }
+                }
+
+                // Final ground-truth calculation from Android OS
+                val trulyUnstopped = eligibleApps.filter { app -> !isAppStopped(app.packageName) }
+                val trulyStopped = eligibleApps.filter { app -> isAppStopped(app.packageName) }
+                val stoppedCount = trulyStopped.size
+                val failedCount = trulyUnstopped.size
+
                 if (failedCount > 0) isPartial = true
 
-                currentAppStats = currentAppStats.copy(remaining = 0)
-                val appSummary = "$stoppedCount stopped, $alreadyStoppedCount already off, $failedCount failed"
+                currentAppStats = currentAppStats.copy(
+                    successfullyStopped = stoppedCount,
+                    alreadyStopped = 0,
+                    failed = failedCount,
+                    remaining = 0,
+                    currentAppName = ""
+                )
+                val appSummary = "$stoppedCount apps force-stopped" + if (failedCount > 0) ", $failedCount skipped" else ""
                 updateChecklist("force_stop", if (failedCount == 0) StepStatus.COMPLETED else StepStatus.PARTIAL, appSummary)
                 updateChecklist("apps", if (failedCount == 0) StepStatus.COMPLETED else StepStatus.PARTIAL, appSummary)
             } else {
@@ -418,7 +420,7 @@ class StatusBarAccessibilityService : AccessibilityService() {
             headphoneStatus = headphoneStatusText,
             isPartial = isPartial
         )
-        delay(600)
+        delay(120)
 
         if (shouldPersistStatusBarHidden(mode)) {
             // Only a status-bar engagement (or the combined mode) may change the
@@ -473,8 +475,12 @@ class StatusBarAccessibilityService : AccessibilityService() {
             )
         }
 
-        delay(1200)
-        returnToApp()
+        delay(250)
+        if (returnToHome) {
+            performGlobalAction(GLOBAL_ACTION_HOME)
+        } else {
+            returnToApp()
+        }
     }
 
     private fun launchSettings() {
@@ -484,7 +490,7 @@ class StatusBarAccessibilityService : AccessibilityService() {
         startActivity(intent)
     }
 
-    private suspend fun waitForSettingsWindow(timeoutMs: Long = 4000): Boolean {
+    private suspend fun waitForSettingsWindow(timeoutMs: Long = 2500): Boolean {
         val startTime = System.currentTimeMillis()
         while (System.currentTimeMillis() - startTime < timeoutMs) {
             val root = rootInActiveWindow
@@ -493,7 +499,7 @@ class StatusBarAccessibilityService : AccessibilityService() {
                 root.recycle()
                 if (pkg.contains("settings")) return true
             }
-            delay(200)
+            delay(60)
         }
         return false
     }
@@ -522,7 +528,7 @@ class StatusBarAccessibilityService : AccessibilityService() {
                     directStatusBar.recycle()
                     root.recycle()
                     if (clicked) {
-                        delay(600)
+                        delay(120)
                         return true
                     }
                 }
@@ -533,7 +539,7 @@ class StatusBarAccessibilityService : AccessibilityService() {
                     node.recycle()
                     root.recycle()
                     if (clicked) {
-                        delay(700)
+                        delay(120)
                         return true
                     }
                 }
@@ -541,7 +547,7 @@ class StatusBarAccessibilityService : AccessibilityService() {
             }
             if (attempt < 4) {
                 scrollForward()
-                delay(400)
+                delay(100)
             }
         }
         return false
@@ -561,7 +567,7 @@ class StatusBarAccessibilityService : AccessibilityService() {
                     node.recycle()
                     root.recycle()
                     if (clicked) {
-                        delay(600)
+                        delay(120)
                         if (isAlreadyInStatusBarSection()) return true
                     }
                 } else {
@@ -570,9 +576,9 @@ class StatusBarAccessibilityService : AccessibilityService() {
             }
             if (attempt == 3 || attempt == 7) {
                 scrollForward()
-                delay(300)
+                delay(80)
             }
-            delay(250)
+            delay(60)
         }
         return isAlreadyInStatusBarSection()
     }
@@ -599,7 +605,7 @@ class StatusBarAccessibilityService : AccessibilityService() {
                     if (clicked) {
                         // Wait for the Settings activity/fragment transition before
                         // deciding that the destination page failed to open.
-                        delay(650)
+                        delay(120)
                         return true
                     }
                 } else {
@@ -609,7 +615,7 @@ class StatusBarAccessibilityService : AccessibilityService() {
 
             if (attempt < maxScrolls) {
                 scrollForward()
-                delay(350)
+                delay(100)
             }
         }
         return false
@@ -702,7 +708,7 @@ class StatusBarAccessibilityService : AccessibilityService() {
             Log.w(TAG, "Could not click Time setting row")
             return
         }
-        delay(500)
+        delay(120)
 
         val targetLabels = if (mode is TargetMode.HideAll || mode is TargetMode.BothEngage) {
             compatibilityManager.doNotShowLabels
@@ -723,7 +729,7 @@ class StatusBarAccessibilityService : AccessibilityService() {
                     }
                     dialogRoot.recycle()
                 }
-                if (!selected && attempt < 11) delay(200)
+                if (!selected && attempt < 11) delay(60)
             }
         }
 
@@ -751,7 +757,7 @@ class StatusBarAccessibilityService : AccessibilityService() {
             root.recycle()
         }
         if (!opened) return summary
-        delay(500)
+        delay(120)
 
         val targetLabels = if (mode is TargetMode.HideAll || mode is TargetMode.BothEngage) {
             compatibilityManager.doNotShowLabels
@@ -772,7 +778,7 @@ class StatusBarAccessibilityService : AccessibilityService() {
                     }
                     dialogRoot.recycle()
                 }
-                if (!selected && attempt < 9) delay(200)
+                if (!selected && attempt < 9) delay(60)
             }
         }
 
@@ -803,7 +809,7 @@ class StatusBarAccessibilityService : AccessibilityService() {
                 } else {
                     Log.i(TAG, "Requested real-time network speed state: $targetState")
                 }
-                delay(300)
+                delay(80)
             }
             toggleNode.recycle()
         }
@@ -822,7 +828,7 @@ class StatusBarAccessibilityService : AccessibilityService() {
                     iconsMenuNode.recycle()
                     root.recycle()
                     if (clicked) {
-                        delay(600)
+                        delay(120)
                         return true
                     }
                 } else {
@@ -831,7 +837,7 @@ class StatusBarAccessibilityService : AccessibilityService() {
             }
             if (attempt == 0) {
                 scrollForward()
-                delay(300)
+                delay(80)
             }
         }
         return false
@@ -860,14 +866,14 @@ class StatusBarAccessibilityService : AccessibilityService() {
 
             previousDiscoveredCount = discoveredMap.size
             val scrolled = scrollForward()
-            delay(500)
+            delay(120)
             scrollAttempts++
             if (!scrolled) break
         }
 
         // Scroll back to top for modification pass
         scrollToTop()
-        delay(400)
+        delay(100)
         return discoveredMap
     }
 
@@ -957,7 +963,7 @@ class StatusBarAccessibilityService : AccessibilityService() {
                 if (keysToDisable.contains(label)) {
                     if (toggleNode.isChecked) {
                         val clicked = clickNodeOrParent(toggleNode)
-                        delay(350) // Let switch animation settle
+                        delay(100) // Let switch animation settle
                         if (!clicked) {
                             Log.w(TAG, "Android rejected click for status icon '$label'")
                             continue
@@ -983,7 +989,7 @@ class StatusBarAccessibilityService : AccessibilityService() {
 
             if (keysToDisable.isEmpty()) break
             val scrolled = scrollForward()
-            delay(400)
+            delay(120)
             scrollPasses++
             if (!scrolled) break
         }
@@ -1018,7 +1024,7 @@ class StatusBarAccessibilityService : AccessibilityService() {
                     val desiredState = targetBaselineMap[label] ?: false
                     if (toggleNode.isChecked != desiredState) {
                         val clicked = clickNodeOrParent(toggleNode)
-                        delay(350)
+                        delay(100)
                         if (!clicked) {
                             Log.w(TAG, "Android rejected restore click for status icon '$label'")
                             continue
@@ -1040,7 +1046,7 @@ class StatusBarAccessibilityService : AccessibilityService() {
 
             if (pendingKeys.isEmpty()) break
             val scrolled = scrollForward()
-            delay(400)
+            delay(120)
             scrollPasses++
             if (!scrolled) break
         }
@@ -1094,10 +1100,10 @@ class StatusBarAccessibilityService : AccessibilityService() {
                 val isHide = mode is TargetMode.HideAll || mode is TargetMode.BothEngage
                 if (isHide && toggle.isChecked) {
                     clickNodeOrParent(toggle)
-                    delay(300)
+                    delay(80)
                 } else if (!isHide && !toggle.isChecked) {
                     clickNodeOrParent(toggle)
-                    delay(300)
+                    delay(80)
                 }
                 toggle.recycle()
                 headphoneNode.recycle()
@@ -1278,6 +1284,18 @@ class StatusBarAccessibilityService : AccessibilityService() {
         return scrolled
     }
 
+    /**
+     * Checks authoritative system PackageManager ground truth for whether an app is stopped.
+     */
+    private fun isAppStopped(packageName: String): Boolean {
+        return try {
+            val appInfo = packageManager.getApplicationInfo(packageName, 0)
+            (appInfo.flags and ApplicationInfo.FLAG_STOPPED) != 0
+        } catch (e: Exception) {
+            true
+        }
+    }
+
     private fun returnToApp() {
         val intent = packageManager.getLaunchIntentForPackage(packageName)?.apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
@@ -1289,7 +1307,7 @@ class StatusBarAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun handleAutomationFailure(reason: String) {
+    private fun handleAutomationFailure(reason: String, returnToHome: Boolean = false) {
         val progress = AutomationProgress(
             currentStep = AutomationStep.FAILED,
             operationTitle = "Automation Error",
@@ -1306,10 +1324,12 @@ class StatusBarAccessibilityService : AccessibilityService() {
             dataStoreRepository.recordOperation("FAILED", reason)
         }
 
-        // Failure can occur while Android Settings is the foreground task.
-        // Bring SysHush back underneath the diagnostic overlay so dismissing
-        // the overlay never drops the user into an abandoned Settings screen.
-        returnToApp()
+        // Return to Launcher Home if initiated from widget, otherwise return to SysHush
+        if (returnToHome) {
+            performGlobalAction(GLOBAL_ACTION_HOME)
+        } else {
+            returnToApp()
+        }
     }
 
     private fun cancelAutomation(reason: String) {

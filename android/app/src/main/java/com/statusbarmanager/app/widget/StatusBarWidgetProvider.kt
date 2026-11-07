@@ -93,26 +93,26 @@ class StatusBarWidgetProvider : AppWidgetProvider() {
         }
         CoroutineScope(Dispatchers.IO).launch {
             if (intent.action == ACTION_WIDGET_STATUS_BAR_ONLY) {
-                coordinator.toggleStatusBarOnly()
+                coordinator.toggleStatusBarOnly(fromWidget = true)
                 updateAllWidgets(context)
                 return@launch
             }
 
             if (intent.action == ACTION_WIDGET_FORCE_STOP) {
-                coordinator.forceStopAppsOnly()
+                coordinator.forceStopAppsOnly(fromWidget = true)
                 updateAllWidgets(context)
                 return@launch
             }
 
             val isHideActive = repo.isHideActiveFlow.first()
             if (isHideActive) {
-                coordinator.disengage()
+                coordinator.disengage(fromWidget = true)
                 updateAllWidgets(context)
                 return@launch
             }
 
             val engageMode = repo.engageModeFlow.first()
-            coordinator.engage()
+            coordinator.engage(fromWidget = true)
             updateAllWidgets(context)
         }
     }
@@ -132,6 +132,7 @@ class StatusBarWidgetProvider : AppWidgetProvider() {
         when {
             !isAccessibilityGranted -> {
                 views.setInt(R.id.widget_icon_container, "setBackgroundResource", R.drawable.widget_icon_bg_normal)
+                views.setViewVisibility(R.id.widget_notification_bubble, View.VISIBLE)
                 views.setInt(R.id.widget_notification_bubble, "setBackgroundResource", R.drawable.widget_bubble_error)
                 views.setTextViewText(R.id.widget_notification_bubble, "!")
                 views.setTextViewText(R.id.widget_status_badge, "PERMISSION")
@@ -139,6 +140,7 @@ class StatusBarWidgetProvider : AppWidgetProvider() {
             }
             isPartial -> {
                 views.setInt(R.id.widget_icon_container, "setBackgroundResource", R.drawable.widget_icon_bg_active)
+                views.setViewVisibility(R.id.widget_notification_bubble, View.VISIBLE)
                 views.setInt(R.id.widget_notification_bubble, "setBackgroundResource", R.drawable.widget_bubble_partial)
                 views.setTextViewText(R.id.widget_notification_bubble, "!")
                 views.setTextViewText(R.id.widget_status_badge, "PARTIAL")
@@ -146,6 +148,7 @@ class StatusBarWidgetProvider : AppWidgetProvider() {
             }
             isHideActive -> {
                 views.setInt(R.id.widget_icon_container, "setBackgroundResource", R.drawable.widget_icon_bg_active)
+                views.setViewVisibility(R.id.widget_notification_bubble, View.VISIBLE)
                 views.setInt(R.id.widget_notification_bubble, "setBackgroundResource", R.drawable.widget_bubble_active)
                 views.setTextViewText(R.id.widget_notification_bubble, "✓")
                 views.setTextViewText(R.id.widget_status_badge, "HUSHED")
@@ -153,7 +156,7 @@ class StatusBarWidgetProvider : AppWidgetProvider() {
             }
             else -> {
                 views.setInt(R.id.widget_icon_container, "setBackgroundResource", R.drawable.widget_icon_bg_normal)
-                views.setInt(R.id.widget_notification_bubble, "setBackgroundResource", R.drawable.widget_bubble_normal)
+                views.setViewVisibility(R.id.widget_notification_bubble, View.GONE)
                 views.setTextViewText(R.id.widget_notification_bubble, "")
                 views.setTextViewText(R.id.widget_status_badge, "NORMAL")
                 views.setTextColor(R.id.widget_status_badge, Color.parseColor("#10B981"))

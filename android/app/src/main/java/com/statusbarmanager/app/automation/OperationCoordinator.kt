@@ -36,7 +36,7 @@ class OperationCoordinator(
     /**
      * Executes the Engage action according to the currently configured EngageMode.
      */
-    suspend fun engage(): Boolean {
+    suspend fun engage(fromWidget: Boolean = false): Boolean {
         val service = StatusBarAccessibilityService.instance
         if (service == null) {
             Log.e(TAG, "Cannot engage: StatusBarAccessibilityService is not connected")
@@ -44,7 +44,7 @@ class OperationCoordinator(
         }
 
         val mode = dataStoreRepository.getEngageMode()
-        Log.i(TAG, "Initiating Engage with mode: $mode")
+        Log.i(TAG, "Initiating Engage with mode: $mode (fromWidget=$fromWidget)")
         // Only status-bar modes create a persistent engagement. App-only
         // force stop is a one-shot action and must leave Hush Button state unchanged.
         if (mode == EngageMode.FORCE_STOP_APPS_ONLY) {
@@ -59,7 +59,7 @@ class OperationCoordinator(
             EngageMode.BOTH -> TargetMode.BothEngage
         }
 
-        service.startAutomation(targetMode)
+        service.startAutomation(targetMode, returnToHome = fromWidget)
         StatusBarWidgetProvider.updateAllWidgets(context)
         return true
     }
@@ -68,11 +68,11 @@ class OperationCoordinator(
      * Toggles only the status-bar workflow without changing the configured Hush Button mode.
      * Restoring the status bar never relaunches apps that were force-stopped earlier.
      */
-    suspend fun toggleStatusBarOnly(): Boolean {
+    suspend fun toggleStatusBarOnly(fromWidget: Boolean = false): Boolean {
         val isCurrentlyActive = dataStoreRepository.isHideActiveFlow.first()
         val activeMode = dataStoreRepository.getActiveEngagementMode()
         if (isCurrentlyActive && activeMode != EngageMode.FORCE_STOP_APPS_ONLY) {
-            return disengage()
+            return disengage(fromWidget)
         }
 
         val service = StatusBarAccessibilityService.instance
@@ -82,13 +82,13 @@ class OperationCoordinator(
         }
 
         dataStoreRepository.setActiveEngagementMode(EngageMode.STATUS_BAR_ONLY)
-        service.startAutomation(TargetMode.HideAll)
+        service.startAutomation(TargetMode.HideAll, returnToHome = fromWidget)
         StatusBarWidgetProvider.updateAllWidgets(context)
         return true
     }
 
     /** Runs the dedicated app-only widget action without changing the configured Hush Button mode. */
-    suspend fun forceStopAppsOnly(): Boolean {
+    suspend fun forceStopAppsOnly(fromWidget: Boolean = false): Boolean {
         val service = StatusBarAccessibilityService.instance
         if (service == null) {
             Log.e(TAG, "Cannot stop running apps: accessibility service is unavailable")
@@ -96,7 +96,7 @@ class OperationCoordinator(
         }
         // A dedicated Stop Apps action is one-shot. Keep any existing
         // status-bar engagement untouched, and do not create a fake active mode.
-        service.startAutomation(TargetMode.ForceStopOnly)
+        service.startAutomation(TargetMode.ForceStopOnly, returnToHome = fromWidget)
         StatusBarWidgetProvider.updateAllWidgets(context)
         return true
     }
@@ -106,7 +106,7 @@ class OperationCoordinator(
      * Restores original status bar configuration only if status bar was actually hidden.
      * NEVER relaunches or restarts stopped apps.
      */
-    suspend fun disengage(): Boolean {
+    suspend fun disengage(fromWidget: Boolean = false): Boolean {
         val service = StatusBarAccessibilityService.instance
         if (service == null) {
             Log.e(TAG, "Cannot disengage: StatusBarAccessibilityService is not connected")
@@ -115,7 +115,7 @@ class OperationCoordinator(
 
         // Read the actual mode that was engaged, falling back to configured mode
         val activeMode = dataStoreRepository.getActiveEngagementMode() ?: dataStoreRepository.getEngageMode()
-        Log.i(TAG, "Initiating Disengage with active engagement mode: $activeMode")
+        Log.i(TAG, "Initiating Disengage with active engagement mode: $activeMode (fromWidget=$fromWidget)")
 
         val targetMode = when (activeMode) {
             EngageMode.STATUS_BAR_ONLY -> TargetMode.RestoreOriginal
@@ -131,7 +131,7 @@ class OperationCoordinator(
         }
 
         dataStoreRepository.clearActiveEngagementMode()
-        service.startAutomation(targetMode)
+        service.startAutomation(targetMode, returnToHome = fromWidget)
         StatusBarWidgetProvider.updateAllWidgets(context)
         return true
     }

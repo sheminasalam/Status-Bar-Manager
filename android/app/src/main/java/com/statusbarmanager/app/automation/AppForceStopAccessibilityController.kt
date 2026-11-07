@@ -81,16 +81,16 @@ class AppForceStopAccessibilityController(
         }
 
         // Brief delay to let Settings activity switch to the target app's screen
-        delay(300)
+        delay(120)
 
         // Step 2 & 3: Find Force Stop button in active window
         var targetPageSeen = false
         var forceStopNode: AccessibilityNodeInfo? = null
-        repeat(20) { attempt ->
+        repeat(16) { attempt ->
             if (forceStopNode == null) {
                 val activeRoot = service.rootInActiveWindow
                 if (activeRoot != null) {
-                    if (isTargetAppInfoPage(activeRoot, appItem)) {
+                    if (isTargetAppInfoPage(activeRoot, appItem, attempt)) {
                         targetPageSeen = true
                         val button = findForceStopButton(activeRoot)
                         if (button != null) {
@@ -100,7 +100,7 @@ class AppForceStopAccessibilityController(
                     }
                     activeRoot.recycle()
                 }
-                if (forceStopNode == null && attempt < 19) delay(250)
+                if (forceStopNode == null && attempt < 15) delay(70)
             }
         }
 
@@ -132,7 +132,7 @@ class AppForceStopAccessibilityController(
         // Step 6 & 7: Handle the native confirmation dialog and verify the
         // Force stop button becomes disabled.
         var confirmationClicked = false
-        repeat(16) { attempt ->
+        repeat(14) { attempt ->
             val activeRoot = service.rootInActiveWindow
             if (activeRoot != null) {
                 if (!confirmationClicked) {
@@ -143,7 +143,7 @@ class AppForceStopAccessibilityController(
                         if (confirmed) {
                             confirmationClicked = true
                             Log.i(TAG, "Confirmed Force Stop dialog for ${appItem.packageName}")
-                            delay(350) // Allow OS to kill process and dismiss dialog
+                            delay(120) // Allow OS to kill process and dismiss dialog
                         }
                     }
                 }
@@ -161,7 +161,7 @@ class AppForceStopAccessibilityController(
                     activeRoot.recycle()
                 }
             }
-            delay(250)
+            delay(70)
         }
 
         // If dialog was confirmed, the OS kill command has been dispatched
@@ -174,7 +174,7 @@ class AppForceStopAccessibilityController(
         return ForceStopResult.FAILED_CONFIRMATION
     }
 
-    private fun isTargetAppInfoPage(root: AccessibilityNodeInfo, appItem: AppItem): Boolean {
+    private fun isTargetAppInfoPage(root: AccessibilityNodeInfo, appItem: AppItem, attempt: Int): Boolean {
         val rootPkg = root.packageName?.toString()?.lowercase() ?: ""
         val isSettingsWindow = rootPkg.contains("settings")
 
@@ -216,7 +216,14 @@ class AppForceStopAccessibilityController(
             }
             if (node !== root) node.recycle()
         }
-        return matched || (isSettingsWindow && hasAppControls)
+
+        // On the first 5 attempts (~400ms), require a positive match for appName or packageName.
+        // This avoids prematurely matching the PREVIOUS app's App Info page while Settings transitions.
+        return if (attempt < 5) {
+            matched
+        } else {
+            matched || (isSettingsWindow && hasAppControls)
+        }
     }
 
     private fun openAppDetailsSettings(packageName: String): Boolean {
