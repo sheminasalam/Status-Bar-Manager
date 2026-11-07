@@ -216,18 +216,25 @@ class StatusBarAccessibilityService : AccessibilityService() {
             publish(AutomationStep.CONFIGURING_NETWORK_SPEED, "Checking Real-time network speed...", 46, 5)
             val actualNetworkSpeed = handleNetworkSpeedSetting(mode)
             updateChecklist("speed", StepStatus.COMPLETED, if (isHideMode) "Disabled" else "Restored")
-            delay(120)
+            // Crucial: allow switch animation and SystemUI broadcast to fully settle before navigating
+            delay(250)
 
             // Step 6: Comprehensive Status Icons Discovery & Toggle
             updateChecklist("scan_icons", StepStatus.IN_PROGRESS)
             publish(AutomationStep.NAVIGATING_TO_STATUS_ICONS, "Accessing Status icons submenu...", 52, 6)
 
-            val navigatedToIcons = navigateIntoStatusIconsSubmenu()
-            delay(120)
+            var navigatedToIcons = navigateIntoStatusIconsSubmenu()
+            delay(150)
 
             publish(AutomationStep.DISCOVERING_ALL_STATUS_ICONS, "Discovering all available status icons...", 58, 6)
             // Dynamically discover all checkable switch rows with scrolling
-            val discoveredIconsMap = discoverAllStatusIconRows()
+            var discoveredIconsMap = discoverAllStatusIconRows()
+            if (discoveredIconsMap.isEmpty()) {
+                Log.w(TAG, "No status icons found on first discovery pass; re-attempting submenu entry...")
+                navigatedToIcons = navigateIntoStatusIconsSubmenu()
+                delay(200)
+                discoveredIconsMap = discoverAllStatusIconRows()
+            }
             Log.i(TAG, "Total status icons dynamically discovered: ${discoveredIconsMap.size} -> ${discoveredIconsMap.keys}")
 
             val discoveredCount = discoveredIconsMap.size
@@ -336,7 +343,7 @@ class StatusBarAccessibilityService : AccessibilityService() {
                     )
 
                     forceStopController.forceStopApp(app)
-                    delay(80)
+                    delay(160)
                 }
 
                 // Verify Ground Truth via ApplicationInfo.FLAG_STOPPED:
@@ -348,7 +355,7 @@ class StatusBarAccessibilityService : AccessibilityService() {
                 // Automatic Pass 2: Retry any applications that are still running after Pass 1
                 if (pendingRetryApps.isNotEmpty()) {
                     Log.i(TAG, "Pass 1 complete. ${pendingRetryApps.size} apps remain running. Executing Pass 2...")
-                    delay(120)
+                    delay(200)
                     pendingRetryApps.forEachIndexed { rIdx, app ->
                         publish(
                             AutomationStep.FORCE_STOPPING_APPS,
@@ -359,7 +366,7 @@ class StatusBarAccessibilityService : AccessibilityService() {
                             appStats = currentAppStats
                         )
                         forceStopController.forceStopApp(app)
-                        delay(80)
+                        delay(160)
                     }
                 }
 
@@ -369,7 +376,7 @@ class StatusBarAccessibilityService : AccessibilityService() {
                 }
                 if (finalUnstopped.isNotEmpty()) {
                     Log.i(TAG, "Pass 2 complete. ${finalUnstopped.size} apps remain. Executing final Pass 3...")
-                    delay(120)
+                    delay(200)
                     finalUnstopped.forEachIndexed { rIdx, app ->
                         publish(
                             AutomationStep.FORCE_STOPPING_APPS,
@@ -380,7 +387,7 @@ class StatusBarAccessibilityService : AccessibilityService() {
                             appStats = currentAppStats
                         )
                         forceStopController.forceStopApp(app)
-                        delay(80)
+                        delay(160)
                     }
                 }
 
@@ -477,7 +484,7 @@ class StatusBarAccessibilityService : AccessibilityService() {
 
         delay(250)
         if (returnToHome) {
-            performGlobalAction(GLOBAL_ACTION_HOME)
+            returnToHomeScreen()
         } else {
             returnToApp()
         }
@@ -818,8 +825,40 @@ class StatusBarAccessibilityService : AccessibilityService() {
         return originalState
     }
 
+    private fun isInsideStatusIconsSubmenu(): Boolean {
+        val root = rootInActiveWindow ?: return false
+        try {
+            var checkableCount = 0
+            val queue = ArrayDeque<AccessibilityNodeInfo>()
+            queue.add(root)
+            while (queue.isNotEmpty()) {
+                val node = queue.removeFirst()
+                if (node.isCheckable) {
+                    val label = findLabelForCheckableNode(node)
+                    if (label != null && !compatibilityManager.isDisallowedStatusIconRow(label)) {
+                        checkableCount++
+                        if (checkableCount >= 2) {
+                            while (queue.isNotEmpty()) queue.removeFirst().recycle()
+                            if (node !== root) node.recycle()
+                            return true
+                        }
+                    }
+                }
+                for (i in 0 until node.childCount) {
+                    node.getChild(i)?.let(queue::add)
+                }
+                if (node !== root) node.recycle()
+            }
+            return checkableCount >= 1
+        } finally {
+            root.recycle()
+        }
+    }
+
     private suspend fun navigateIntoStatusIconsSubmenu(): Boolean {
-        for (attempt in 0..1) {
+        if (isInsideStatusIconsSubmenu()) return true
+
+        for (attempt in 0..4) {
             val root = rootInActiveWindow
             if (root != null) {
                 val iconsMenuNode = findNodeMatching(root, compatibilityManager.statusIconsSubmenuLabels)
@@ -828,19 +867,27 @@ class StatusBarAccessibilityService : AccessibilityService() {
                     iconsMenuNode.recycle()
                     root.recycle()
                     if (clicked) {
-                        delay(120)
-                        return true
+                        // Poll rootInActiveWindow until the destination submenu appears
+                        var arrived = false
+                        repeat(15) {
+                            delay(80)
+                            if (isInsideStatusIconsSubmenu()) {
+                                arrived = true
+                                return@repeat
+                            }
+                        }
+                        if (arrived || isInsideStatusIconsSubmenu()) return true
                     }
                 } else {
                     root.recycle()
                 }
             }
-            if (attempt == 0) {
-                scrollForward()
-                delay(80)
+            if (attempt < 4) {
+                if (attempt % 2 == 0) scrollForward() else scrollToTop()
+                delay(100)
             }
         }
-        return false
+        return isInsideStatusIconsSubmenu()
     }
 
     /**
@@ -854,12 +901,29 @@ class StatusBarAccessibilityService : AccessibilityService() {
         var scrollAttempts = 0
         val maxScrolls = 6
 
+        // Initial wait loop: wait up to 10 cycles (~800ms) for the icon list to populate
+        repeat(10) { attempt ->
+            val root = rootInActiveWindow
+            if (root != null) {
+                val visible = scanCurrentScreenIconRows(root)
+                root.recycle()
+                if (visible.isNotEmpty()) {
+                    discoveredMap.putAll(visible)
+                    return@repeat
+                }
+            }
+            if (discoveredMap.isEmpty() && attempt < 9) {
+                delay(80)
+            }
+        }
+
         while (scrollAttempts < maxScrolls) {
             val root = rootInActiveWindow ?: break
             val currentVisible = scanCurrentScreenIconRows(root)
+            root.recycle()
             discoveredMap.putAll(currentVisible)
 
-            if (discoveredMap.size == previousDiscoveredCount) {
+            if (discoveredMap.isNotEmpty() && discoveredMap.size == previousDiscoveredCount) {
                 // No new items discovered after scroll -> end of list reached
                 break
             }
@@ -1296,6 +1360,19 @@ class StatusBarAccessibilityService : AccessibilityService() {
         }
     }
 
+    private fun returnToHomeScreen() {
+        val homeIntent = Intent(Intent.ACTION_MAIN).apply {
+            addCategory(Intent.CATEGORY_HOME)
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+        }
+        try {
+            startActivity(homeIntent)
+        } catch (_: Exception) {
+            // fallback
+        }
+        performGlobalAction(GLOBAL_ACTION_HOME)
+    }
+
     private fun returnToApp() {
         val intent = packageManager.getLaunchIntentForPackage(packageName)?.apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
@@ -1326,7 +1403,7 @@ class StatusBarAccessibilityService : AccessibilityService() {
 
         // Return to Launcher Home if initiated from widget, otherwise return to SysHush
         if (returnToHome) {
-            performGlobalAction(GLOBAL_ACTION_HOME)
+            returnToHomeScreen()
         } else {
             returnToApp()
         }

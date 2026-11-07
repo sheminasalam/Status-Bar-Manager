@@ -81,12 +81,12 @@ class AppForceStopAccessibilityController(
         }
 
         // Brief delay to let Settings activity switch to the target app's screen
-        delay(120)
+        delay(180)
 
         // Step 2 & 3: Find Force Stop button in active window
         var targetPageSeen = false
         var forceStopNode: AccessibilityNodeInfo? = null
-        repeat(16) { attempt ->
+        repeat(18) { attempt ->
             if (forceStopNode == null) {
                 val activeRoot = service.rootInActiveWindow
                 if (activeRoot != null) {
@@ -100,7 +100,7 @@ class AppForceStopAccessibilityController(
                     }
                     activeRoot.recycle()
                 }
-                if (forceStopNode == null && attempt < 15) delay(70)
+                if (forceStopNode == null && attempt < 17) delay(70)
             }
         }
 
@@ -113,16 +113,41 @@ class AppForceStopAccessibilityController(
             return ForceStopResult.UNAVAILABLE_OR_DISABLED
         }
 
-        // Step 4: Check if Force Stop button is enabled
-        if (!forceStopNode.isEnabled) {
+        // Step 4: Verify if Force Stop button is enabled.
+        // In Android Settings (InstalledAppDetails), mForceStopButton is initially disabled while
+        // ActivityManager.getPackageProcessState() is queried asynchronously on a background thread.
+        // We poll for up to 6 cycles (~480ms) so running apps are never falsely marked as ALREADY_STOPPED.
+        var isEnabled = forceStopNode?.isEnabled == true
+        if (!isEnabled) {
+            repeat(6) { waitAttempt ->
+                delay(80)
+                val activeRoot = service.rootInActiveWindow
+                if (activeRoot != null) {
+                    val freshButton = findForceStopButton(activeRoot)
+                    if (freshButton != null) {
+                        if (freshButton.isEnabled) {
+                            isEnabled = true
+                            forceStopNode?.recycle()
+                            forceStopNode = AccessibilityNodeInfo.obtain(freshButton)
+                        }
+                        if (freshButton !== activeRoot) freshButton.recycle()
+                    }
+                    activeRoot.recycle()
+                }
+                if (isEnabled) return@repeat
+            }
+        }
+
+        if (!isEnabled || forceStopNode == null) {
             Log.i(TAG, "Force Stop button is disabled; app is already stopped: ${appItem.packageName}")
-            forceStopNode.recycle()
+            forceStopNode?.recycle()
             return ForceStopResult.ALREADY_STOPPED
         }
 
         // Step 5: Click Force Stop button
-        val clicked = clickNodeOrParent(forceStopNode)
-        forceStopNode.recycle()
+        val targetNode = forceStopNode!!
+        val clicked = clickNodeOrParent(targetNode)
+        targetNode.recycle()
 
         if (!clicked) {
             Log.e(TAG, "Failed to perform click on Force Stop button for ${appItem.packageName}")
@@ -132,22 +157,22 @@ class AppForceStopAccessibilityController(
         // Step 6 & 7: Handle the native confirmation dialog and verify the
         // Force stop button becomes disabled.
         var confirmationClicked = false
-        repeat(14) { attempt ->
-            val activeRoot = service.rootInActiveWindow
-            if (activeRoot != null) {
-                if (!confirmationClicked) {
-                    val confirmNode = findConfirmationButton(activeRoot)
-                    if (confirmNode != null) {
-                        val confirmed = clickNodeOrParent(confirmNode)
-                        confirmNode.recycle()
-                        if (confirmed) {
-                            confirmationClicked = true
-                            Log.i(TAG, "Confirmed Force Stop dialog for ${appItem.packageName}")
-                            delay(120) // Allow OS to kill process and dismiss dialog
-                        }
+        repeat(16) { attempt ->
+            if (!confirmationClicked) {
+                val confirmNode = findConfirmationInWindows()
+                if (confirmNode != null) {
+                    val confirmed = clickNodeOrParent(confirmNode)
+                    confirmNode.recycle()
+                    if (confirmed) {
+                        confirmationClicked = true
+                        Log.i(TAG, "Confirmed Force Stop dialog for ${appItem.packageName}")
+                        delay(120) // Allow OS to kill process and dismiss dialog
                     }
                 }
+            }
 
+            val activeRoot = service.rootInActiveWindow
+            if (activeRoot != null) {
                 val postButton = findForceStopButton(activeRoot)
                 if (postButton != null) {
                     val isNowDisabled = !postButton.isEnabled
@@ -274,6 +299,35 @@ class AppForceStopAccessibilityController(
         return null
     }
 
+    private fun findConfirmationInWindows(): AccessibilityNodeInfo? {
+        val root = service.rootInActiveWindow
+        if (root != null) {
+            val btn = findConfirmationButton(root)
+            if (btn != null) {
+                if (btn !== root) root.recycle()
+                return btn
+            }
+            root.recycle()
+        }
+
+        // Secondary check: look through all active accessibility windows for dialog popups
+        try {
+            val windows = service.windows
+            for (window in windows) {
+                val winRoot = window.root ?: continue
+                val btn = findConfirmationButton(winRoot)
+                if (btn != null) {
+                    if (btn !== winRoot) winRoot.recycle()
+                    return btn
+                }
+                winRoot.recycle()
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Window enumeration exception: ${e.message}")
+        }
+        return null
+    }
+
     private fun findConfirmationButton(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
         val queue = ArrayDeque<AccessibilityNodeInfo>()
         queue.add(root)
@@ -282,12 +336,18 @@ class AppForceStopAccessibilityController(
             val node = queue.removeFirst()
             val text = node.text?.toString()?.trim()?.lowercase() ?: ""
             val desc = node.contentDescription?.toString()?.trim()?.lowercase() ?: ""
+            val id = node.viewIdResourceName?.lowercase() ?: ""
 
-            val matches = CONFIRMATION_BUTTON_LABELS.any { label ->
+            val isDialogButton1 = id.endsWith(":id/button1") ||
+                id.endsWith(":id/button_positive") ||
+                id.endsWith(":id/btn_confirm") ||
+                id.endsWith(":id/positive_button")
+
+            val matches = isDialogButton1 || CONFIRMATION_BUTTON_LABELS.any { label ->
                 text == label || desc == label || text.startsWith("ok")
             }
             val isCancel = text.contains("cancel") || desc.contains("cancel") ||
-                text.contains("annuler")
+                text.contains("annuler") || text.contains("cancelar") || id.endsWith(":id/button2")
 
             val parent = if (!node.isClickable) node.parent else null
             val hasClickableParent = parent?.isClickable == true
