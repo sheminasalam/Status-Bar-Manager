@@ -320,8 +320,10 @@ class StatusBarAccessibilityService : AccessibilityService() {
 
                 updateChecklist("force_stop", StepStatus.IN_PROGRESS)
 
+                val pendingRetryApps = mutableListOf<AppItem>()
+
                 eligibleApps.forEachIndexed { idx, app ->
-                    val appProgressPercent = 60 + ((idx + 1) * 35 / eligibleApps.size)
+                    val appProgressPercent = 60 + ((idx + 1) * 30 / eligibleApps.size)
                     currentAppStats = currentAppStats.copy(
                         currentAppName = app.appName,
                         remaining = eligibleApps.size - idx
@@ -349,14 +351,50 @@ class StatusBarAccessibilityService : AccessibilityService() {
                         ForceStopResult.FAILED_OPENING_SETTINGS,
                         ForceStopResult.FAILED_CONFIRMATION,
                         ForceStopResult.UNAVAILABLE_OR_DISABLED -> {
+                            pendingRetryApps.add(app)
                             failedCount++
                             currentAppStats = currentAppStats.copy(failed = failedCount)
-                            isPartial = true
                         }
                         else -> { }
                     }
                     delay(300)
                 }
+
+                // Automatic Pass 2: Retry any applications that failed on the first attempt
+                if (pendingRetryApps.isNotEmpty()) {
+                    Log.i(TAG, "Executing automatic retry pass for ${pendingRetryApps.size} apps...")
+                    delay(500)
+                    val retryList = pendingRetryApps.toList()
+                    retryList.forEachIndexed { rIdx, app ->
+                        publish(
+                            AutomationStep.FORCE_STOPPING_APPS,
+                            "Retrying ${app.appName} (${rIdx + 1}/${retryList.size})...",
+                            92 + ((rIdx + 1) * 5 / retryList.size),
+                            6,
+                            iconStats = stats,
+                            appStats = currentAppStats
+                        )
+                        val retryResult = forceStopController.forceStopApp(app)
+                        if (retryResult == ForceStopResult.SUCCESSFULLY_STOPPED) {
+                            stoppedCount++
+                            failedCount = maxOf(0, failedCount - 1)
+                            currentAppStats = currentAppStats.copy(
+                                successfullyStopped = stoppedCount,
+                                failed = failedCount
+                            )
+                        } else if (retryResult == ForceStopResult.ALREADY_STOPPED) {
+                            alreadyStoppedCount++
+                            failedCount = maxOf(0, failedCount - 1)
+                            currentAppStats = currentAppStats.copy(
+                                alreadyStopped = alreadyStoppedCount,
+                                failed = failedCount
+                            )
+                        }
+                        delay(300)
+                    }
+                }
+
+                if (failedCount > 0) isPartial = true
 
                 currentAppStats = currentAppStats.copy(remaining = 0)
                 val appSummary = "$stoppedCount stopped, $alreadyStoppedCount already off, $failedCount failed"

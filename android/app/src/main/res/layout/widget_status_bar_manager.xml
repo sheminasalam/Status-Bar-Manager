@@ -3,58 +3,85 @@
     android:id="@+id/widget_root"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@drawable/widget_background"
-    android:gravity="center_vertical"
-    android:orientation="horizontal"
-    android:padding="8dp">
+    android:gravity="center"
+    android:orientation="vertical"
+    android:padding="4dp">
 
-    <ImageView
-        android:layout_width="28dp"
-        android:layout_height="28dp"
-        android:layout_marginEnd="8dp"
-        android:contentDescription="@string/app_name"
-        android:src="@drawable/ic_widget_syshush" />
+    <!-- Normal App-style Squircle Icon with Notification Bubble -->
+    <FrameLayout
+        android:id="@+id/widget_icon_container"
+        android:layout_width="56dp"
+        android:layout_height="56dp"
+        android:background="@drawable/widget_icon_bg_normal">
 
-    <LinearLayout
-        android:layout_width="0dp"
-        android:layout_height="wrap_content"
-        android:layout_weight="1"
-        android:orientation="vertical">
+        <!-- Centered Proportional 1:1 SysHush App Icon Symbol -->
+        <ImageView
+            android:id="@+id/widget_icon_image"
+            android:layout_width="32dp"
+            android:layout_height="32dp"
+            android:layout_gravity="center"
+            android:contentDescription="@string/app_name"
+            android:src="@drawable/ic_widget_syshush" />
 
+        <!-- Notification Bubble Badge at Top-Right Corner -->
         <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="Hush Button"
-            android:textColor="#F8FAFC"
-            android:textSize="12sp"
-            android:textStyle="bold" />
-
-        <TextView
-            android:id="@+id/widget_status_badge"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="NORMAL"
-            android:textColor="#10B981"
+            android:id="@+id/widget_notification_bubble"
+            android:layout_width="18dp"
+            android:layout_height="18dp"
+            android:layout_gravity="top|end"
+            android:layout_marginTop="-2dp"
+            android:layout_marginEnd="-2dp"
+            android:background="@drawable/widget_bubble_normal"
+            android:gravity="center"
+            android:text=""
+            android:textColor="#FFFFFF"
             android:textSize="9sp"
             android:textStyle="bold" />
+    </FrameLayout>
 
-        <TextView
-            android:id="@+id/widget_mode_text"
-            android:layout_width="wrap_content"
-            android:layout_height="0dp"
-            android:text=""
-            android:visibility="gone" />
-    </LinearLayout>
-
-    <Button
-        android:id="@+id/widget_action_button"
+    <!-- App Name Label (Matches Home Screen App Icon Typography) -->
+    <TextView
+        android:id="@+id/widget_app_label"
         android:layout_width="wrap_content"
-        android:layout_height="38dp"
-        android:background="@drawable/widget_button_background"
-        android:minWidth="76dp"
-        android:text="Hush"
-        android:textAllCaps="false"
-        android:textColor="#FFFFFF"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:ellipsize="end"
+        android:gravity="center"
+        android:maxLines="1"
+        android:shadowColor="#CC000000"
+        android:shadowDx="0"
+        android:shadowDy="1"
+        android:shadowRadius="2"
+        android:text="@string/app_name"
+        android:textColor="#F8FAFC"
         android:textSize="11sp"
         android:textStyle="bold" />
+
+    <!-- Status Subtitle Pill / Indicator (e.g. HUSHED / NORMAL) -->
+    <TextView
+        android:id="@+id/widget_status_badge"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="1dp"
+        android:ellipsize="end"
+        android:gravity="center"
+        android:maxLines="1"
+        android:text="NORMAL"
+        android:textColor="#10B981"
+        android:textSize="9sp"
+        android:textStyle="bold" />
+
+    <!-- Retained for backward-compatibility with remote views bindings -->
+    <TextView
+        android:id="@+id/widget_mode_text"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:visibility="gone" />
+
+    <TextView
+        android:id="@+id/widget_action_button"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:visibility="gone" />
+
 </LinearLayout>

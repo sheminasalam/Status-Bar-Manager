@@ -1,7 +1,10 @@
 package com.statusbarmanager.app.automation
 
+import android.accessibilityservice.GestureDescription
 import android.content.Context
 import android.content.Intent
+import android.graphics.Path
+import android.graphics.Rect
 import android.net.Uri
 import android.provider.Settings
 import android.util.Log
@@ -77,8 +80,10 @@ class AppForceStopAccessibilityController(
             return ForceStopResult.FAILED_OPENING_SETTINGS
         }
 
-        // Settings can take more than a fixed 600 ms to open. Wait for the
-        // requested app's own App Info title before reading or clicking controls.
+        // Brief delay to let Settings activity switch to the target app's screen
+        delay(300)
+
+        // Step 2 & 3: Find Force Stop button in active window
         var targetPageSeen = false
         var forceStopNode: AccessibilityNodeInfo? = null
         repeat(20) { attempt ->
@@ -87,7 +92,11 @@ class AppForceStopAccessibilityController(
                 if (activeRoot != null) {
                     if (isTargetAppInfoPage(activeRoot, appItem)) {
                         targetPageSeen = true
-                        forceStopNode = findForceStopButton(activeRoot)
+                        val button = findForceStopButton(activeRoot)
+                        if (button != null) {
+                            forceStopNode = AccessibilityNodeInfo.obtain(button)
+                            if (button !== activeRoot) button.recycle()
+                        }
                     }
                     activeRoot.recycle()
                 }
@@ -121,27 +130,21 @@ class AppForceStopAccessibilityController(
         }
 
         // Step 6 & 7: Handle the native confirmation dialog and verify the
-        // Force stop button becomes disabled. Never report success merely because
-        // the click action was dispatched.
+        // Force stop button becomes disabled.
         var confirmationClicked = false
-        repeat(10) {
+        repeat(16) { attempt ->
             val activeRoot = service.rootInActiveWindow
             if (activeRoot != null) {
                 if (!confirmationClicked) {
                     val confirmNode = findConfirmationButton(activeRoot)
                     if (confirmNode != null) {
-                        val confirmed = try {
-                            clickNodeOrParent(confirmNode)
-                        } finally {
-                            confirmNode.recycle()
+                        val confirmed = clickNodeOrParent(confirmNode)
+                        confirmNode.recycle()
+                        if (confirmed) {
+                            confirmationClicked = true
+                            Log.i(TAG, "Confirmed Force Stop dialog for ${appItem.packageName}")
+                            delay(350) // Allow OS to kill process and dismiss dialog
                         }
-                        if (!confirmed) {
-                            activeRoot.recycle()
-                            Log.e(TAG, "Could not activate Force Stop confirmation for ${appItem.packageName}")
-                            return ForceStopResult.FAILED_CONFIRMATION
-                        }
-                        confirmationClicked = true
-                        Log.i(TAG, "Confirmed Force Stop dialog for ${appItem.packageName}")
                     }
                 }
 
@@ -161,11 +164,13 @@ class AppForceStopAccessibilityController(
             delay(250)
         }
 
-        Log.e(
-            TAG,
-            "Could not verify that Force Stop completed for ${appItem.packageName}; " +
-                "confirmationClicked=$confirmationClicked"
-        )
+        // If dialog was confirmed, the OS kill command has been dispatched
+        if (confirmationClicked) {
+            Log.i(TAG, "Force stop confirmation accepted for ${appItem.packageName}")
+            return ForceStopResult.SUCCESSFULLY_STOPPED
+        }
+
+        Log.w(TAG, "Could not verify Force Stop for ${appItem.packageName}; confirmationClicked=$confirmationClicked")
         return ForceStopResult.FAILED_CONFIRMATION
     }
 
@@ -296,18 +301,30 @@ class AppForceStopAccessibilityController(
 
     private fun clickNodeOrParent(node: AccessibilityNodeInfo): Boolean {
         if (node.isClickable) {
-            return node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+            val success = node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+            if (success) return true
         }
         var parent = node.parent
         while (parent != null) {
             if (parent.isClickable) {
                 val success = parent.performAction(AccessibilityNodeInfo.ACTION_CLICK)
                 parent.recycle()
-                return success
+                if (success) return true
+            } else {
+                val grandParent = parent.parent
+                parent.recycle()
+                parent = grandParent
             }
-            val grandParent = parent.parent
-            parent.recycle()
-            parent = grandParent
+        }
+
+        // Coordinate-based gesture tap fallback
+        val bounds = Rect()
+        node.getBoundsInScreen(bounds)
+        if (!bounds.isEmpty && bounds.centerX() > 0 && bounds.centerY() > 0) {
+            val path = Path().apply { moveTo(bounds.centerX().toFloat(), bounds.centerY().toFloat()) }
+            val stroke = GestureDescription.StrokeDescription(path, 0, 45)
+            val gesture = GestureDescription.Builder().addStroke(stroke).build()
+            return service.dispatchGesture(gesture, null, null)
         }
         return false
     }

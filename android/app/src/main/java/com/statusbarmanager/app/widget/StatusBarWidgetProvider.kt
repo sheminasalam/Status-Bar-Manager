@@ -128,29 +128,39 @@ class StatusBarWidgetProvider : AppWidgetProvider() {
     ) {
         val views = RemoteViews(context.packageName, R.layout.widget_status_bar_manager)
 
-        // Status badge
-        val (statusText, statusColor) = when {
-            !isAccessibilityGranted -> "NEEDS PERMISSION" to Color.parseColor("#EF4444")
-            isPartial -> "PARTIAL" to Color.parseColor("#F59E0B")
-            isHideActive -> "ENGAGED" to Color.parseColor("#3B82F6")
-            else -> "NORMAL" to Color.parseColor("#10B981")
+        // Set Icon container background, bubble, and badge according to state
+        when {
+            !isAccessibilityGranted -> {
+                views.setInt(R.id.widget_icon_container, "setBackgroundResource", R.drawable.widget_icon_bg_normal)
+                views.setInt(R.id.widget_notification_bubble, "setBackgroundResource", R.drawable.widget_bubble_error)
+                views.setTextViewText(R.id.widget_notification_bubble, "!")
+                views.setTextViewText(R.id.widget_status_badge, "PERMISSION")
+                views.setTextColor(R.id.widget_status_badge, Color.parseColor("#EF4444"))
+            }
+            isPartial -> {
+                views.setInt(R.id.widget_icon_container, "setBackgroundResource", R.drawable.widget_icon_bg_active)
+                views.setInt(R.id.widget_notification_bubble, "setBackgroundResource", R.drawable.widget_bubble_partial)
+                views.setTextViewText(R.id.widget_notification_bubble, "!")
+                views.setTextViewText(R.id.widget_status_badge, "PARTIAL")
+                views.setTextColor(R.id.widget_status_badge, Color.parseColor("#F59E0B"))
+            }
+            isHideActive -> {
+                views.setInt(R.id.widget_icon_container, "setBackgroundResource", R.drawable.widget_icon_bg_active)
+                views.setInt(R.id.widget_notification_bubble, "setBackgroundResource", R.drawable.widget_bubble_active)
+                views.setTextViewText(R.id.widget_notification_bubble, "✓")
+                views.setTextViewText(R.id.widget_status_badge, "HUSHED")
+                views.setTextColor(R.id.widget_status_badge, Color.parseColor("#38BDF8"))
+            }
+            else -> {
+                views.setInt(R.id.widget_icon_container, "setBackgroundResource", R.drawable.widget_icon_bg_normal)
+                views.setInt(R.id.widget_notification_bubble, "setBackgroundResource", R.drawable.widget_bubble_normal)
+                views.setTextViewText(R.id.widget_notification_bubble, "")
+                views.setTextViewText(R.id.widget_status_badge, "NORMAL")
+                views.setTextColor(R.id.widget_status_badge, Color.parseColor("#10B981"))
+            }
         }
-        views.setTextViewText(R.id.widget_status_badge, statusText)
-        views.setTextColor(R.id.widget_status_badge, statusColor)
 
-        // Mode info
-        val modeStr = when (engageMode) {
-            EngageMode.STATUS_BAR_ONLY -> "Mode: Status Bar Only"
-            EngageMode.FORCE_STOP_APPS_ONLY -> "Mode: Force Stop Apps Only"
-            EngageMode.BOTH -> "Mode: Both (Status Bar + Apps)"
-        }
-        views.setTextViewText(R.id.widget_mode_text, modeStr)
-
-        // Action button text
-        val buttonText = if (isHideActive) "Disengage" else "Engage"
-        views.setTextViewText(R.id.widget_action_button, buttonText)
-
-        // Toggle PendingIntent
+        // Toggle PendingIntent on click
         val toggleIntent = Intent(context, StatusBarWidgetProvider::class.java).apply {
             action = ACTION_WIDGET_TOGGLE
         }
@@ -160,19 +170,8 @@ class StatusBarWidgetProvider : AppWidgetProvider() {
             toggleIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
-        views.setOnClickPendingIntent(R.id.widget_action_button, pendingIntent)
-
-        // Root click opens main app
-        val openAppIntent = Intent(context, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK
-        }
-        val openAppPendingIntent = PendingIntent.getActivity(
-            context,
-            0,
-            openAppIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-        views.setOnClickPendingIntent(R.id.widget_root, openAppPendingIntent)
+        views.setOnClickPendingIntent(R.id.widget_root, pendingIntent)
+        views.setOnClickPendingIntent(R.id.widget_icon_container, pendingIntent)
 
         appWidgetManager.updateAppWidget(appWidgetId, views)
     }
