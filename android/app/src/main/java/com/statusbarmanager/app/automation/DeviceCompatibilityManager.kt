@@ -46,8 +46,11 @@ class DeviceCompatibilityManager {
         "Notification & status bar",
         "Notifications & Status bar",
         "Notifications and status bar",
+        "Notification and status bar",
         "Notifications & Status Bar",
         "Status bar & notifications",
+        "Notifications & control center",
+        "Notification & Control Centre",
         "Notifications"
     )
 
@@ -64,12 +67,21 @@ class DeviceCompatibilityManager {
         "Status bar clock"
     )
 
+    val batteryStyleLabels = listOf(
+        "Battery style",
+        "Battery icon",
+        "Battery display",
+        "Battery icon style"
+    )
+
     val doNotShowLabels = listOf(
         "Do not show",
         "Don't show",
         "Hide",
         "Do not display",
-        "None"
+        "None",
+        "Off",
+        "Hidden"
     )
 
     val statusIconsSubmenuLabels = listOf(

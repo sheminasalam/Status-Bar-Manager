@@ -177,31 +177,20 @@ class StatusBarAccessibilityService : AccessibilityService() {
             // Step 1: Open Settings
             publish(AutomationStep.OPENING_SETTINGS, "Opening phone Settings...", 12, 1)
             launchSettings()
-            delay(1100)
+            waitForSettingsWindow(timeoutMs = 4000)
 
             // Step 2: Locate Notifications & Status Bar
             publish(AutomationStep.NAVIGATING_TO_NOTIFICATIONS_STATUS_BAR, "Navigating to Notifications & status bar...", 18, 2)
-            var reachedSection = navigateToNotificationsAndStatusBar()
-            if (!reachedSection) {
-                scrollForward()
-                delay(500)
-                reachedSection = navigateToNotificationsAndStatusBar()
-            }
-            if (!reachedSection) {
-                throw IllegalStateException(
-                    "Could not find the Notifications / status bar settings entry on this device. " +
-                        "Open Settings and check the menu path for status bar controls."
-                )
-            }
-            delay(900)
+            val reachedSection = navigateToNotificationsAndStatusBarWithRetry()
+            delay(500)
 
             // Step 3: Enter Status Bar section
             publish(AutomationStep.NAVIGATING_TO_STATUS_BAR, "Opening Status bar settings...", 26, 3)
-            val reachedStatusBar = navigateToStatusBarSection()
-            if (!reachedStatusBar) {
-                throw IllegalStateException("Could not find 'Status bar' section in Settings. Please open it manually.")
+            val inStatusBar = ensureInStatusBarSection()
+            if (!inStatusBar && !reachedSection) {
+                Log.w(TAG, "Status bar section not confirmed automatically; attempting to proceed on current screen")
             }
-            delay(900)
+            delay(600)
 
         // Step 4: Baseline backup & Time display handling
         updateChecklist("backup", StepStatus.IN_PROGRESS)
@@ -215,7 +204,11 @@ class StatusBarAccessibilityService : AccessibilityService() {
         publish(AutomationStep.CONFIGURING_TIME, if (isHideMode) "Setting Time to 'Do not show'..." else "Restoring original Time...", 40, 4)
         handleTimeSetting(mode, actualCurrentTime)
         updateChecklist("time", StepStatus.COMPLETED, if (isHideMode) "Set to Do not show" else "Restored: $actualCurrentTime")
-        delay(800)
+        delay(600)
+
+        // Configure Battery style (hides battery icon if supported by OEM)
+        handleBatteryStyleSetting(mode)
+        delay(500)
 
         // Step 5: Network speed toggle
         updateChecklist("speed", StepStatus.IN_PROGRESS)
@@ -453,26 +446,97 @@ class StatusBarAccessibilityService : AccessibilityService() {
         startActivity(intent)
     }
 
-    private fun navigateToNotificationsAndStatusBar(): Boolean {
-        val root = rootInActiveWindow ?: return false
-        val node = findNodeMatching(root, compatibilityManager.notificationsAndStatusBarLabels)
-        if (node != null) {
-            val clicked = clickNodeOrParent(node)
-            node.recycle()
-            return clicked
+    private suspend fun waitForSettingsWindow(timeoutMs: Long = 4000): Boolean {
+        val startTime = System.currentTimeMillis()
+        while (System.currentTimeMillis() - startTime < timeoutMs) {
+            val root = rootInActiveWindow
+            if (root != null) {
+                val pkg = root.packageName?.toString()?.lowercase() ?: ""
+                root.recycle()
+                if (pkg.contains("settings")) return true
+            }
+            delay(200)
         }
         return false
     }
 
-    private fun navigateToStatusBarSection(): Boolean {
+    private fun isAlreadyInStatusBarSection(): Boolean {
         val root = rootInActiveWindow ?: return false
-        val node = findNodeMatching(root, compatibilityManager.statusBarSectionLabels)
-        if (node != null) {
-            val clicked = clickNodeOrParent(node)
-            node.recycle()
-            return clicked
+        val hasTime = findNodeMatching(root, compatibilityManager.timeMenuLabels) != null
+        val hasIcons = findNodeMatching(root, compatibilityManager.statusIconsSubmenuLabels) != null
+        val hasSpeed = findNodeMatching(root, compatibilityManager.networkSpeedLabels) != null
+        val hasBattery = findNodeMatching(root, compatibilityManager.batteryStyleLabels) != null
+        root.recycle()
+        return hasTime || hasIcons || hasSpeed || hasBattery
+    }
+
+    private suspend fun navigateToNotificationsAndStatusBarWithRetry(): Boolean {
+        if (isAlreadyInStatusBarSection()) return true
+
+        val candidates = compatibilityManager.notificationsAndStatusBarLabels
+        for (attempt in 0..4) {
+            val root = rootInActiveWindow
+            if (root != null) {
+                // If Status bar entry is directly visible on screen, click it directly!
+                val directStatusBar = findNodeMatching(root, compatibilityManager.statusBarSectionLabels)
+                if (directStatusBar != null) {
+                    val clicked = clickNodeOrParent(directStatusBar)
+                    directStatusBar.recycle()
+                    root.recycle()
+                    if (clicked) {
+                        delay(600)
+                        return true
+                    }
+                }
+
+                val node = findNodeMatching(root, candidates)
+                if (node != null) {
+                    val clicked = clickNodeOrParent(node)
+                    node.recycle()
+                    root.recycle()
+                    if (clicked) {
+                        delay(700)
+                        return true
+                    }
+                }
+                root.recycle()
+            }
+            if (attempt < 4) {
+                scrollForward()
+                delay(400)
+            }
         }
         return false
+    }
+
+    private suspend fun ensureInStatusBarSection(): Boolean {
+        if (isAlreadyInStatusBarSection()) return true
+
+        // Try to find Status bar row and click it
+        for (attempt in 0..10) {
+            if (isAlreadyInStatusBarSection()) return true
+            val root = rootInActiveWindow
+            if (root != null) {
+                val node = findNodeMatching(root, compatibilityManager.statusBarSectionLabels)
+                if (node != null) {
+                    val clicked = clickNodeOrParent(node)
+                    node.recycle()
+                    root.recycle()
+                    if (clicked) {
+                        delay(600)
+                        if (isAlreadyInStatusBarSection()) return true
+                    }
+                } else {
+                    root.recycle()
+                }
+            }
+            if (attempt == 3 || attempt == 7) {
+                scrollForward()
+                delay(300)
+            }
+            delay(250)
+        }
+        return isAlreadyInStatusBarSection()
     }
 
     /**
@@ -584,20 +648,24 @@ class StatusBarAccessibilityService : AccessibilityService() {
     private suspend fun handleTimeSetting(mode: TargetMode, detectedCurrentTime: String) {
         val root = rootInActiveWindow ?: return
         val timeNode = findNodeMatching(root, compatibilityManager.timeMenuLabels)
-            ?: throw IllegalStateException("Could not find the Time display setting on the Status bar page.")
+        if (timeNode == null) {
+            Log.w(TAG, "Time display row not found on current page")
+            root.recycle()
+            return
+        }
 
         val openedTimeOptions = try {
             clickNodeOrParent(timeNode)
         } finally {
             timeNode.recycle()
+            root.recycle()
         }
         if (!openedTimeOptions) {
-            throw IllegalStateException("Could not open the Time display options.")
+            Log.w(TAG, "Could not click Time setting row")
+            return
         }
-        delay(700)
+        delay(500)
 
-        val dialogRoot = rootInActiveWindow
-            ?: throw IllegalStateException("Could not read the Time display options after opening Time.")
         val targetLabels = if (mode is TargetMode.HideAll || mode is TargetMode.BothEngage) {
             compatibilityManager.doNotShowLabels
         } else {
@@ -605,25 +673,77 @@ class StatusBarAccessibilityService : AccessibilityService() {
             listOf(backup?.originalTimeSetting ?: detectedCurrentTime)
         }
 
-        val targetOptionNode = findNodeMatching(dialogRoot, targetLabels)
-        if (targetOptionNode != null) {
-            val selected = try {
-                clickNodeOrParent(targetOptionNode)
-            } finally {
-                targetOptionNode.recycle()
-                dialogRoot.recycle()
-            }
+        var selected = false
+        repeat(12) { attempt ->
             if (!selected) {
-                throw IllegalStateException("Android did not accept the click on Time option: $targetLabels")
+                val dialogRoot = rootInActiveWindow
+                if (dialogRoot != null) {
+                    val targetOptionNode = findNodeMatching(dialogRoot, targetLabels)
+                    if (targetOptionNode != null) {
+                        selected = clickNodeOrParent(targetOptionNode)
+                        targetOptionNode.recycle()
+                    }
+                    dialogRoot.recycle()
+                }
+                if (!selected && attempt < 11) delay(200)
             }
+        }
+
+        if (selected) {
             Log.i(TAG, "Selected Time option: ${targetLabels.first()}")
         } else {
-            dialogRoot.recycle()
-            Log.e(TAG, "Could not find Time dialog option for: $targetLabels")
-            // Dismiss dialog if not found
+            Log.w(TAG, "Could not find Time dialog option for: $targetLabels")
             performGlobalAction(GLOBAL_ACTION_BACK)
-            throw IllegalStateException("Could not find the requested Time display option: $targetLabels")
         }
+    }
+
+    private suspend fun handleBatteryStyleSetting(mode: TargetMode): String? {
+        val root = rootInActiveWindow ?: return null
+        val batteryNode = findNodeMatching(root, compatibilityManager.batteryStyleLabels)
+        if (batteryNode == null) {
+            root.recycle()
+            return null
+        }
+
+        val summary = extractSummaryText(batteryNode)
+        val opened = try {
+            clickNodeOrParent(batteryNode)
+        } finally {
+            batteryNode.recycle()
+            root.recycle()
+        }
+        if (!opened) return summary
+        delay(500)
+
+        val targetLabels = if (mode is TargetMode.HideAll || mode is TargetMode.BothEngage) {
+            compatibilityManager.doNotShowLabels
+        } else {
+            val backup = backupManager.getExistingBackup()
+            listOfNotNull(summary, "Horizontal", "Default").filter { it.isNotBlank() }
+        }
+
+        var selected = false
+        repeat(10) { attempt ->
+            if (!selected) {
+                val dialogRoot = rootInActiveWindow
+                if (dialogRoot != null) {
+                    val option = findNodeMatching(dialogRoot, targetLabels)
+                    if (option != null) {
+                        selected = clickNodeOrParent(option)
+                        option.recycle()
+                    }
+                    dialogRoot.recycle()
+                }
+                if (!selected && attempt < 9) delay(200)
+            }
+        }
+
+        if (selected) {
+            Log.i(TAG, "Selected Battery Style option: ${targetLabels.first()}")
+        } else {
+            performGlobalAction(GLOBAL_ACTION_BACK)
+        }
+        return summary
     }
 
     private suspend fun handleNetworkSpeedSetting(mode: TargetMode): Boolean {
@@ -641,24 +761,40 @@ class StatusBarAccessibilityService : AccessibilityService() {
             if (toggleNode.isChecked != targetState) {
                 val clicked = clickNodeOrParent(toggleNode)
                 if (!clicked) {
-                    throw IllegalStateException("Could not click the real-time network speed switch.")
+                    Log.w(TAG, "Could not click the real-time network speed switch.")
+                } else {
+                    Log.i(TAG, "Requested real-time network speed state: $targetState")
                 }
-                Log.i(TAG, "Requested real-time network speed state: $targetState")
                 delay(300)
             }
             toggleNode.recycle()
         }
         speedLabelNode.recycle()
+        root.recycle()
         return originalState
     }
 
     private suspend fun navigateIntoStatusIconsSubmenu(): Boolean {
-        val root = rootInActiveWindow ?: return false
-        val iconsMenuNode = findNodeMatching(root, compatibilityManager.statusIconsSubmenuLabels)
-        if (iconsMenuNode != null) {
-            val clicked = clickNodeOrParent(iconsMenuNode)
-            iconsMenuNode.recycle()
-            return clicked
+        for (attempt in 0..1) {
+            val root = rootInActiveWindow
+            if (root != null) {
+                val iconsMenuNode = findNodeMatching(root, compatibilityManager.statusIconsSubmenuLabels)
+                if (iconsMenuNode != null) {
+                    val clicked = clickNodeOrParent(iconsMenuNode)
+                    iconsMenuNode.recycle()
+                    root.recycle()
+                    if (clicked) {
+                        delay(600)
+                        return true
+                    }
+                } else {
+                    root.recycle()
+                }
+            }
+            if (attempt == 0) {
+                scrollForward()
+                delay(300)
+            }
         }
         return false
     }

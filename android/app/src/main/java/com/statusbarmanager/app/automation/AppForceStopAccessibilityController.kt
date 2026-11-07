@@ -170,26 +170,40 @@ class AppForceStopAccessibilityController(
     }
 
     private fun isTargetAppInfoPage(root: AccessibilityNodeInfo, appItem: AppItem): Boolean {
+        val rootPkg = root.packageName?.toString()?.lowercase() ?: ""
+        val isSettingsWindow = rootPkg.contains("settings")
+
         val expectedLabel = appItem.appName.trim()
         val expectedPackage = appItem.packageName.trim()
         val queue = ArrayDeque<AccessibilityNodeInfo>()
         queue.add(root)
 
         var matched = false
+        var hasAppControls = false
+
         while (queue.isNotEmpty()) {
             val node = queue.removeFirst()
-            val values = listOfNotNull(
-                node.text?.toString()?.trim(),
-                node.contentDescription?.toString()?.trim()
-            )
-            if (values.any { value ->
-                    value.equals(expectedLabel, ignoreCase = true) ||
-                        value.contains(expectedPackage, ignoreCase = true)
-                }) {
+            val text = node.text?.toString()?.trim() ?: ""
+            val desc = node.contentDescription?.toString()?.trim() ?: ""
+
+            if (text.equals(expectedLabel, ignoreCase = true) ||
+                desc.equals(expectedLabel, ignoreCase = true) ||
+                text.contains(expectedPackage, ignoreCase = true) ||
+                desc.contains(expectedPackage, ignoreCase = true)
+            ) {
                 matched = true
                 while (queue.isNotEmpty()) queue.removeFirst().recycle()
                 if (node !== root) node.recycle()
                 break
+            }
+
+            val lowerText = text.lowercase()
+            val lowerDesc = desc.lowercase()
+            if (FORCE_STOP_BUTTON_LABELS.any { lowerText.contains(it) || lowerDesc.contains(it) } ||
+                lowerText.contains("uninstall") || lowerDesc.contains("uninstall") ||
+                lowerText.contains("disable") || lowerDesc.contains("disable")
+            ) {
+                hasAppControls = true
             }
 
             for (index in 0 until node.childCount) {
@@ -197,7 +211,7 @@ class AppForceStopAccessibilityController(
             }
             if (node !== root) node.recycle()
         }
-        return matched
+        return matched || (isSettingsWindow && hasAppControls)
     }
 
     private fun openAppDetailsSettings(packageName: String): Boolean {

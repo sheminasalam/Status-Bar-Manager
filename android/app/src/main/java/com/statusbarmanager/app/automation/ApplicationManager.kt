@@ -133,75 +133,79 @@ class ApplicationManager(private val context: Context) {
      * This is a live-process approximation, not a guaranteed list of Recents task cards.
      */
     fun getEligibleAppsForForceStop(userWhitelist: Set<String>): List<AppItem> {
-        val activityManager = context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
-            ?: return emptyList()
-
-        val processImportanceByPackage = try {
-            val runningProcesses = activityManager.runningAppProcesses.orEmpty()
-            val packageImportance = linkedMapOf<String, Int>()
-            for (process in runningProcesses) {
-                if (!isActiveProcessImportance(process.importance)) continue
-                process.pkgList.orEmpty().forEach { packageName ->
-                    val previousImportance = packageImportance[packageName]
-                    if (previousImportance == null || process.importance < previousImportance) {
-                        packageImportance[packageName] = process.importance
-                    }
-                }
-            }
-            packageImportance
-        } catch (e: Exception) {
-            Log.e(TAG, "Unable to read active application processes: ${e.message}", e)
-            emptyMap()
-        }
-
-        if (processImportanceByPackage.isEmpty()) {
-            Log.i(TAG, "No non-cached user application processes are eligible for force stop.")
-            return emptyList()
-        }
-
         val myPackage = context.packageName
         val launcherPackage = getDefaultLauncherPackage()
         val imePackage = getActiveInputMethodPackage()
         val dialerPackage = getDefaultDialerPackage()
         val smsPackage = getDefaultSmsPackage()
 
-        return processImportanceByPackage.entries
-            .sortedWith(compareBy({ it.value }, { it.key }))
-            .mapNotNull { (pkg, _) ->
-                if (pkg == myPackage || userWhitelist.contains(pkg)) return@mapNotNull null
+        fun isProtected(pkg: String): Boolean =
+            pkg == myPackage ||
+            pkg == launcherPackage ||
+            pkg == imePackage ||
+            pkg == dialerPackage ||
+            pkg == smsPackage ||
+            pkg.startsWith("com.android.systemui") ||
+            pkg.startsWith("com.google.android.inputmethod")
 
-                val info = try {
-                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
-                        packageManager.getApplicationInfo(
-                            pkg,
-                            PackageManager.ApplicationInfoFlags.of(PackageManager.GET_META_DATA.toLong())
-                        )
-                    } else {
-                        @Suppress("DEPRECATION")
-                        packageManager.getApplicationInfo(pkg, PackageManager.GET_META_DATA)
+        // 1. Inspect live process importance if accessible by system
+        val activityManager = context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
+        val runningProcessPackages = linkedSetOf<String>()
+        if (activityManager != null) {
+            try {
+                val runningProcesses = activityManager.runningAppProcesses.orEmpty()
+                for (process in runningProcesses) {
+                    if (!isActiveProcessImportance(process.importance)) continue
+                    process.pkgList.orEmpty().forEach { pkg ->
+                        if (!isProtected(pkg) && !userWhitelist.contains(pkg)) {
+                            runningProcessPackages.add(pkg)
+                        }
                     }
-                } catch (_: PackageManager.NameNotFoundException) {
-                    return@mapNotNull null
-                } catch (e: Exception) {
-                    Log.w(TAG, "Unable to inspect active package $pkg: ${e.message}")
-                    return@mapNotNull null
                 }
+            } catch (e: Exception) {
+                Log.w(TAG, "Unable to inspect active processes: ${e.message}")
+            }
+        }
 
-                val isSystem = (info.flags and ApplicationInfo.FLAG_SYSTEM != 0) ||
-                    (info.flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP != 0)
-                val isStopped = (info.flags and ApplicationInfo.FLAG_STOPPED) != 0
-                val protectedRole = pkg == launcherPackage || pkg == imePackage ||
-                    pkg == dialerPackage || pkg == smsPackage ||
-                    pkg.startsWith("com.android.systemui") ||
-                    pkg.startsWith("com.google.android.inputmethod")
+        // 2. Discover all installed third-party user applications
+        val installed = try {
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                packageManager.getInstalledApplications(
+                    PackageManager.ApplicationInfoFlags.of(PackageManager.GET_META_DATA.toLong())
+                )
+            } else {
+                @Suppress("DEPRECATION")
+                packageManager.getInstalledApplications(PackageManager.GET_META_DATA)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to retrieve installed packages: ${e.message}")
+            emptyList()
+        }
 
-                if (isSystem || isStopped || protectedRole) return@mapNotNull null
+        val eligibleCandidates = mutableListOf<AppItem>()
 
-                val label = try {
-                    packageManager.getApplicationLabel(info).toString()
-                } catch (_: Exception) {
-                    pkg
-                }
+        for (appInfo in installed) {
+            val pkg = appInfo.packageName
+            if (isProtected(pkg) || userWhitelist.contains(pkg)) continue
+
+            val isSystem = (appInfo.flags and ApplicationInfo.FLAG_SYSTEM != 0) ||
+                (appInfo.flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP != 0)
+            val isStopped = (appInfo.flags and ApplicationInfo.FLAG_STOPPED) != 0
+
+            // Skip system apps and apps that are already in the stopped state
+            if (isSystem || isStopped) continue
+
+            // Must be a user-launchable application (e.g. WhatsApp, Spotify, Chrome)
+            val launchIntent = packageManager.getLaunchIntentForPackage(pkg)
+            if (launchIntent == null && !runningProcessPackages.contains(pkg)) continue
+
+            val label = try {
+                packageManager.getApplicationLabel(appInfo).toString()
+            } catch (_: Exception) {
+                pkg
+            }
+
+            eligibleCandidates.add(
                 AppItem(
                     packageName = pkg,
                     appName = label,
@@ -210,10 +214,18 @@ class ApplicationManager(private val context: Context) {
                     isProtectedRole = false,
                     isStopped = false
                 )
-            }
-            .also { eligible ->
-                Log.i(TAG, "Found ${eligible.size} eligible packages with non-cached processes.")
-            }
+            )
+        }
+
+        // Prioritize applications explicitly identified in active processes, then sort alphabetically
+        return eligibleCandidates.sortedWith(
+            compareBy(
+                { !runningProcessPackages.contains(it.packageName) },
+                { it.appName.lowercase() }
+            )
+        ).also { eligible ->
+            Log.i(TAG, "Found ${eligible.size} eligible active user applications for force-stop.")
+        }
     }
 
     fun getAppIcon(packageName: String): Drawable? {
